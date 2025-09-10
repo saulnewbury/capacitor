@@ -1,3 +1,4 @@
+'use client'
 import { Prec, RangeSetBuilder } from '@codemirror/state'
 import {
   Decoration,

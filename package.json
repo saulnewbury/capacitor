@@ -6,12 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "next lint"
   },
   "dependencies": {
+    "@capacitor/action-sheet": "^7.0.2",
     "@capacitor/android": "^7.4.3",
+    "@capacitor/app": "^7.1.0",
+    "@capacitor/browser": "^7.0.2",
     "@capacitor/cli": "^7.4.3",
+    "@capacitor/clipboard": "^7.0.2",
     "@capacitor/core": "^7.4.3",
+    "@capacitor/haptics": "^7.0.2",
     "@capacitor/ios": "^7.4.3",
     "@codemirror/commands": "^6.8.1",
     "@codemirror/lang-markdown": "^6.3.4",

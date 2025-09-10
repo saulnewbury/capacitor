@@ -13,9 +13,7 @@ export const commonStyles = EditorView.theme({
     overflowY: 'auto !important',
     boxSizing: 'border-box',
     minHeight: '100%',
-    height: 'auto',
-    paddingLeft: '30px',
-    paddingRight: '30px'
+    height: 'auto'
   },
 
   '.cm-content': {

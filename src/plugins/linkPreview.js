@@ -19,7 +19,7 @@ export class LinkPreviewWidget extends WidgetType {
     this.previewData = this.generateInitialPreview(linkInfo.url)
     this.domElement = null
 
-    console.log('🔗 LinkPreviewWidget created for:', linkInfo.url)
+    console.log('ðŸ”— LinkPreviewWidget created for:', linkInfo.url)
 
     // Check if this link has a custom title
     const customTitle = getCustomLinkTitle(linkInfo.url, linkInfo.text)
@@ -41,14 +41,14 @@ export class LinkPreviewWidget extends WidgetType {
   async fetchRealMetadata() {
     try {
       console.log(
-        '🔍 LinkPreview: Starting metadata fetch for:',
+        'ðŸ” LinkPreview: Starting metadata fetch for:',
         this.linkInfo.url
       )
 
       const realMetadata = await metadataFetcher.fetchMetadata(
         this.linkInfo.url
       )
-      // console.log('✅ LinkPreview: Received metadata:', realMetadata)
+      // console.log('âœ… LinkPreview: Received metadata:', realMetadata)
 
       // Update our preview data
       this.previewData = {
@@ -56,14 +56,14 @@ export class LinkPreviewWidget extends WidgetType {
         title: this.hasCustomTitle ? this.previewData.title : realMetadata.title
       }
 
-      // console.log('🔄 LinkPreview: Updated preview data:', this.previewData)
+      // console.log('ðŸ”„ LinkPreview: Updated preview data:', this.previewData)
 
       // Update the DOM if it exists
       if (this.domElement) {
         this.updateDOMContent(this.previewData)
       }
     } catch (error) {
-      console.warn('⚠️ LinkPreview: Failed to fetch metadata:', error)
+      console.warn('âš ï¸ LinkPreview: Failed to fetch metadata:', error)
     }
   }
 
@@ -97,7 +97,7 @@ export class LinkPreviewWidget extends WidgetType {
           : data.author
         const clampedAuthorText = this.clampText(authorText, 20)
         linkTextElement.textContent = clampedAuthorText
-        linkTextElement.title = `By ${authorText} • ${data.domain}`
+        linkTextElement.title = `By ${authorText} â€¢ ${data.domain}`
         console.log('Updated authors to:', clampedAuthorText)
       } else if (data.domain) {
         // Fallback to domain
@@ -122,7 +122,7 @@ export class LinkPreviewWidget extends WidgetType {
 
   updateContentDisplay(data) {
     console.log(
-      '🖼️ LinkPreview: Updating content display for type:',
+      'ðŸ–¼ï¸ LinkPreview: Updating content display for type:',
       data.contentType
     )
 
@@ -273,7 +273,7 @@ export class LinkPreviewWidget extends WidgetType {
       preview.favicon = `${baseUrl}/favicon.ico`
     }
 
-    console.log('🛠️ Generated initial preview:', preview)
+    console.log('ðŸ› ï¸ Generated initial preview:', preview)
     return preview
   }
 
@@ -646,7 +646,7 @@ export class LinkPreviewWidget extends WidgetType {
         ? this.previewData.author.join(', ')
         : this.previewData.author
       linkText.textContent = this.clampText(authorText, 20)
-      linkText.title = `By ${authorText} • ${this.previewData.domain}`
+      linkText.title = `By ${authorText} â€¢ ${this.previewData.domain}`
     } else {
       // Fallback to domain
       linkText.textContent = this.clampText(this.previewData.domain, 15)

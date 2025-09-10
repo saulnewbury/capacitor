@@ -62,7 +62,7 @@ import { linkExtensions } from '@/plugins/linkStyling'
 import { promptFieldExtensions } from '@/plugins/promptFieldExtension'
 import { textBubbleExtensions } from '@/plugins/textBubbleStyling'
 
-export default function CodeMirror(): JSX.Element {
+export default function CodeMirror() {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
 
@@ -108,6 +108,12 @@ export default function CodeMirror(): JSX.Element {
       ]
 
       const extensions: Extension[] = [
+        EditorView.domEventHandlers({
+          touchstart: (event) => {
+            console.log('TEST HANDLER: Touch detected on', event.target)
+            // Don't return anything - just log
+          }
+        }),
         // 1. Markdown parser with properly configured code languages
         markdown({
           codeLanguages: supportedLanguages,
@@ -138,7 +144,7 @@ export default function CodeMirror(): JSX.Element {
         // 7. Tag styling
         tagExtensions,
 
-        // linkExtensions,
+        linkExtensions,
 
         // 8. Heading-related extensions
         headingStyling,
@@ -206,6 +212,10 @@ export default function CodeMirror(): JSX.Element {
         extensions
       })
 
+      console.log('linkExtensions:', linkExtensions)
+      console.log('Is linkExtensions an array?', Array.isArray(linkExtensions))
+      console.log('linkExtensions length:', linkExtensions?.length)
+
       viewRef.current = new EditorView({
         state: startState,
         parent: editorRef.current
@@ -227,7 +237,7 @@ export default function CodeMirror(): JSX.Element {
   return (
     <div className='w-full h-full relative overflow-hidden'>
       <div
-        className='absolute inset-0 px-[30px] overflow-y-scroll overflow-x-hidden'
+        className='absolute inset-0 pt-[15px] px-[30px] overflow-y-scroll overflow-x-hidden'
         style={{
           overscrollBehavior: 'contain',
           WebkitOverflowScrolling: 'touch'
