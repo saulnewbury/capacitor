@@ -226,7 +226,13 @@ export default function CodeMirror(): JSX.Element {
 
   return (
     <div className='w-full h-full relative overflow-hidden'>
-      <div className='absolute inset-0 overflow-y-scroll overflow-x-hidden'>
+      <div
+        className='absolute inset-0 px-[30px] overflow-y-scroll overflow-x-hidden'
+        style={{
+          overscrollBehavior: 'contain',
+          WebkitOverflowScrolling: 'touch'
+        }}
+      >
         <div ref={editorRef} className='min-h-full w-full markdown-editor' />
       </div>
     </div>
