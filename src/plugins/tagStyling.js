@@ -472,8 +472,6 @@ function isImmediatelyAfterSpaces(state, pos) {
   return false
 }
 
-// Replace the tagCharacterHandler in your tagStyling.js with this updated version:
-
 export const tagCharacterHandler = EditorView.inputHandler.of(
   (view, from, to, content) => {
     const { state } = view
@@ -923,10 +921,10 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
           let insertText, deleteFrom
           if (hasOneSpaceBeforeHash) {
             // Replace the single space before hash with three spaces
-            insertText = '   #' + content
+            insertText = '   #' + content + '  ' // Added two spaces after content
             deleteFrom = hashPos - 1
           } else {
-            insertText = '   #' + content
+            insertText = '   #' + content + '  ' // Added two spaces after content
             deleteFrom = hashPos
           }
 
@@ -937,7 +935,7 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
 
           view.dispatch({
             changes: { from: deleteFrom, to: from, insert: insertText },
-            selection: { anchor: deleteFrom + insertText.length },
+            selection: { anchor: deleteFrom + insertText.length - 2 }, // Position cursor right after the character
             effects: setActiveTagEffect.of({
               active: true,
               from: deleteFrom + 3, // Always 3 spaces before the #
@@ -947,8 +945,12 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
           })
         } else if (needsIndent) {
           view.dispatch({
-            changes: { from: hashPos, to: from, insert: '  #' + content },
-            selection: { anchor: hashPos + 4 },
+            changes: {
+              from: hashPos,
+              to: from,
+              insert: '  #' + content + '  '
+            }, // Added two spaces after content
+            selection: { anchor: hashPos + 4 }, // Position cursor right after the character
             effects: setActiveTagEffect.of({
               active: true,
               from: hashPos + 2,
@@ -958,8 +960,8 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
           })
         } else {
           view.dispatch({
-            changes: { from, to, insert: content },
-            selection: { anchor: from + content.length },
+            changes: { from, to, insert: content + '  ' }, // Added two spaces after content
+            selection: { anchor: from + 1 }, // Position cursor right after the character
             effects: setActiveTagEffect.of({
               active: true,
               from: hashPos,
@@ -970,14 +972,15 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
         }
         return true
       } else {
+        // For characters that allow spaces (closed tags)
         if (needsThreeSpaces) {
           let insertText, deleteFrom
           if (hasOneSpaceBeforeHash) {
             // Replace the single space before hash with three spaces
-            insertText = '   #' + content
+            insertText = '   #' + content + '  ' // Added two spaces after content
             deleteFrom = hashPos - 1
           } else {
-            insertText = '   #' + content
+            insertText = '   #' + content + '  ' // Added two spaces after content
             deleteFrom = hashPos
           }
 
@@ -988,7 +991,7 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
 
           view.dispatch({
             changes: { from: deleteFrom, to: from, insert: insertText },
-            selection: { anchor: deleteFrom + insertText.length },
+            selection: { anchor: deleteFrom + insertText.length - 2 }, // Position cursor right after the character
             effects: setActiveTagEffect.of({
               active: true,
               from: deleteFrom + 3, // Always 3 spaces before the #
@@ -998,8 +1001,12 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
           })
         } else if (needsIndent) {
           view.dispatch({
-            changes: { from: hashPos, to: from, insert: '  #' + content },
-            selection: { anchor: hashPos + 4 },
+            changes: {
+              from: hashPos,
+              to: from,
+              insert: '  #' + content + '  '
+            }, // Added two spaces after content
+            selection: { anchor: hashPos + 4 }, // Position cursor right after the character
             effects: setActiveTagEffect.of({
               active: true,
               from: hashPos + 2,
@@ -1009,12 +1016,12 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
           })
         } else {
           view.dispatch({
-            changes: { from, to, insert: content },
-            selection: { anchor: from + content.length },
+            changes: { from, to, insert: content + '  ' }, // Added two spaces after content
+            selection: { anchor: from + 1 }, // Position cursor right after the character
             effects: setActiveTagEffect.of({
               active: true,
               from: hashPos,
-              allowSpaces: true
+              allowSpaces: false
             }),
             userEvent: 'input.type'
           })
@@ -1078,10 +1085,16 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
           })
           return true
         } else if (content !== ' ') {
+          // Check if we need to clean up auto-inserted spaces
+          const twoSpacesAfter = state.doc.sliceString(tagEnd, tagEnd + 2)
+          const shouldCleanupSpaces = twoSpacesAfter === '  '
+
           const insert = '   ' + content
           const insertPos = tagEnd
+          const deleteTo = shouldCleanupSpaces ? tagEnd + 2 : tagEnd
+
           view.dispatch({
-            changes: { from: insertPos, to: insertPos, insert },
+            changes: { from: insertPos, to: deleteTo, insert },
             selection: { anchor: insertPos + insert.length },
             effects: setActiveTagEffect.of({
               active: false,
@@ -1117,12 +1130,53 @@ export const tagCharacterHandler = EditorView.inputHandler.of(
   }
 )
 
-// Replace the handleTagBackspaceKey function in your tagStyling.js with this version:
-
 function handleTagBackspaceKey(view) {
   const { state } = view
   const head = state.selection.main.head
   const tagAtCursor = findTagAtCursor(state, head)
+
+  // NEW: Check if cursor is 2 spaces after a tag and jump back instead of deleting
+  if (head >= 2) {
+    const line = state.doc.lineAt(head)
+    const lineText = line.text
+    const pos = head - line.from
+
+    // Check if cursor is exactly 2 spaces after a tag
+    if (pos >= 2 && lineText.substring(pos - 2, pos) === '  ') {
+      const textBeforeSpaces = lineText.substring(0, pos - 2)
+
+      // Check if there's a tag immediately before the 2 spaces
+      const closedMatches = [...textBeforeSpaces.matchAll(CLOSED_TAG_REGEX)]
+      if (closedMatches.length > 0) {
+        const lastMatch = closedMatches[closedMatches.length - 1]
+        const tagEnd = lastMatch.index + lastMatch[0].length
+
+        if (tagEnd === pos - 2) {
+          // Jump back 2 spaces instead of deleting them
+          view.dispatch({
+            selection: { anchor: head - 2 },
+            userEvent: 'select'
+          })
+          return true
+        }
+      }
+
+      const simpleMatches = [...textBeforeSpaces.matchAll(TAG_REGEX)]
+      if (simpleMatches.length > 0) {
+        const lastMatch = simpleMatches[simpleMatches.length - 1]
+        const tagEnd = lastMatch.index + lastMatch[0].length
+
+        if (tagEnd === pos - 2) {
+          // Jump back 2 spaces instead of deleting them
+          view.dispatch({
+            selection: { anchor: head - 2 },
+            userEvent: 'select'
+          })
+          return true
+        }
+      }
+    }
+  }
 
   if (
     tagAtCursor &&
@@ -1578,6 +1632,10 @@ function handleTagBackspaceKey(view) {
     const tagContent = state.doc.sliceString(activeTag.from, head)
 
     if (tagContent.length === 2 && tagContent.startsWith('#')) {
+      // Check if there are auto-inserted spaces to clean up
+      const twoSpacesAfter = state.doc.sliceString(head, head + 2)
+      const shouldCleanupSpaces = twoSpacesAfter === '  '
+
       if (activeTag.from >= 2) {
         const twoSpacesBefore = state.doc.sliceString(
           activeTag.from - 2,
@@ -1585,7 +1643,11 @@ function handleTagBackspaceKey(view) {
         )
         if (twoSpacesBefore === '  ') {
           view.dispatch({
-            changes: { from: activeTag.from - 2, to: head, insert: '#' },
+            changes: {
+              from: activeTag.from - 2,
+              to: head + (shouldCleanupSpaces ? 2 : 0),
+              insert: '#'
+            },
             selection: { anchor: activeTag.from - 2 + 1 },
             effects: setActiveTagEffect.of({
               active: false,
@@ -1597,6 +1659,21 @@ function handleTagBackspaceKey(view) {
           return true
         }
       }
+
+      // Handle cleanup even without preceding spaces
+      if (shouldCleanupSpaces) {
+        view.dispatch({
+          changes: { from: head - 1, to: head + 2, insert: '' },
+          selection: { anchor: head - 1 },
+          effects: setActiveTagEffect.of({
+            active: false,
+            from: null,
+            allowSpaces: false
+          }),
+          userEvent: 'delete'
+        })
+        return true
+      }
     }
   }
 
@@ -1604,6 +1681,10 @@ function handleTagBackspaceKey(view) {
     const tagContent = state.doc.sliceString(tagAtCursor.start, tagAtCursor.end)
 
     if (tagContent.length === 2 && head === tagAtCursor.end) {
+      // Check if there are auto-inserted spaces after the tag to clean up
+      const twoSpacesAfter = state.doc.sliceString(head, head + 2)
+      const shouldCleanupSpaces = twoSpacesAfter === '  '
+
       if (tagAtCursor.start >= 2) {
         const twoSpacesBefore = state.doc.sliceString(
           tagAtCursor.start - 2,
@@ -1613,7 +1694,7 @@ function handleTagBackspaceKey(view) {
           view.dispatch({
             changes: {
               from: tagAtCursor.start - 2,
-              to: tagAtCursor.end,
+              to: tagAtCursor.end + (shouldCleanupSpaces ? 2 : 0), // ← Add cleanup for trailing spaces
               insert: '#'
             },
             selection: { anchor: tagAtCursor.start - 2 + 1 },
@@ -1621,6 +1702,16 @@ function handleTagBackspaceKey(view) {
           })
           return true
         }
+      }
+
+      // Handle cleanup even without preceding spaces
+      if (shouldCleanupSpaces) {
+        view.dispatch({
+          changes: { from: head - 1, to: head + 2, insert: '' },
+          selection: { anchor: head - 1 },
+          userEvent: 'delete'
+        })
+        return true
       }
     }
   }
@@ -1706,23 +1797,54 @@ function handleTagSpaceKey(view) {
   }
 
   if (activeTag.active && head === activeTag.from + 1) {
+    // Space pressed immediately after hash - this breaks the tag syntax
+    // We need to find and clean up any auto-inserted spaces after the tag content
+
+    const line = state.doc.lineAt(head)
+    const textAfterHash = state.doc.sliceString(head, line.to)
+
+    // Find where the tag content would end (first space or end of line)
+    let tagContentEnd = 0
+    while (
+      tagContentEnd < textAfterHash.length &&
+      textAfterHash[tagContentEnd] !== ' ' &&
+      textAfterHash[tagContentEnd] !== '\n'
+    ) {
+      tagContentEnd++
+    }
+
+    // Check if there are auto-inserted spaces after the tag content
+    let spacesToCleanup = 0
+    if (
+      tagContentEnd < textAfterHash.length &&
+      textAfterHash[tagContentEnd] === ' '
+    ) {
+      // Count consecutive spaces
+      let spaceCount = 0
+      let i = tagContentEnd
+      while (i < textAfterHash.length && textAfterHash[i] === ' ') {
+        spaceCount++
+        i++
+      }
+      // Only cleanup if there are exactly 2 spaces (auto-inserted)
+      if (spaceCount === 2) {
+        spacesToCleanup = 2
+      }
+    }
+
     if (activeTag.from >= 2) {
       const twoSpacesBefore = state.doc.sliceString(
         activeTag.from - 2,
         activeTag.from
       )
       if (twoSpacesBefore === '  ') {
-        const line = state.doc.lineAt(head)
-        const afterCursor = state.doc.sliceString(head, line.to)
-        const spaceIndex = afterCursor.search(/\s/)
-        const tagContent =
-          spaceIndex === -1 ? afterCursor : afterCursor.substring(0, spaceIndex)
-
+        const tagContent = textAfterHash.substring(0, tagContentEnd)
         const newContent = '# ' + tagContent
+
         view.dispatch({
           changes: {
             from: activeTag.from - 2,
-            to: head + tagContent.length,
+            to: head + tagContentEnd + spacesToCleanup,
             insert: newContent
           },
           selection: { anchor: activeTag.from - 2 + 2 },
@@ -1736,6 +1858,35 @@ function handleTagSpaceKey(view) {
         return true
       }
     }
+
+    // Handle case where no preceding spaces but still need to cleanup trailing spaces
+    if (spacesToCleanup > 0) {
+      view.dispatch({
+        changes: {
+          from: head,
+          to: head,
+          insert: ' '
+        },
+        selection: { anchor: head + 1 },
+        effects: setActiveTagEffect.of({
+          active: false,
+          from: null,
+          allowSpaces: false
+        }),
+        userEvent: 'input.type'
+      })
+
+      // Remove the trailing spaces in a separate transaction
+      view.dispatch({
+        changes: {
+          from: head + 1 + tagContentEnd,
+          to: head + 1 + tagContentEnd + spacesToCleanup,
+          insert: ''
+        }
+      })
+      return true
+    }
+
     return false
   }
 
@@ -1769,16 +1920,38 @@ function handleTagSpaceKey(view) {
       } else {
         const tagContent = beforeCursor.substring(1)
         if (/^[a-zA-Z0-9_\/-]+$/.test(tagContent)) {
-          view.dispatch({
-            changes: { from: head, to: head, insert: '   ' },
-            selection: { anchor: head + 3 },
-            effects: setActiveTagEffect.of({
-              active: false,
-              from: null,
-              allowSpaces: false
-            }),
-            userEvent: 'input.type'
-          })
+          // Check if there are already 2 spaces after the cursor
+          const twoSpacesAfter = state.doc.sliceString(head, head + 2)
+          if (twoSpacesAfter === '  ') {
+            // Move cursor 2 positions forward and add 1 space
+            view.dispatch({
+              selection: { anchor: head + 2 },
+              effects: setActiveTagEffect.of({
+                active: false,
+                from: null,
+                allowSpaces: false
+              }),
+              userEvent: 'select'
+            })
+            // Then add one space
+            view.dispatch({
+              changes: { from: head + 2, to: head + 2, insert: ' ' },
+              selection: { anchor: head + 3 },
+              userEvent: 'input.type'
+            })
+          } else {
+            // Fallback to original behavior if spaces aren't there
+            view.dispatch({
+              changes: { from: head, to: head, insert: '   ' },
+              selection: { anchor: head + 3 },
+              effects: setActiveTagEffect.of({
+                active: false,
+                from: null,
+                allowSpaces: false
+              }),
+              userEvent: 'input.type'
+            })
+          }
           return true
         }
       }
@@ -1930,12 +2103,24 @@ function handleTagRightArrow(view) {
   const { state } = view
   const head = state.selection.main.head
 
+  console.log('=== RIGHT ARROW DEBUG ===')
+  console.log('head:', head)
+  console.log('doc.length:', state.doc.length)
+
   if (head >= state.doc.length) return false
 
   const line = state.doc.lineAt(head)
   const pos = head - line.from
   const lineText = line.text
 
+  console.log('line.from:', line.from)
+  console.log('line.to:', line.to)
+  console.log('pos in line:', pos)
+  console.log('lineText:', JSON.stringify(lineText))
+  console.log('char at pos:', JSON.stringify(lineText.charAt(pos)))
+  console.log('char before pos:', JSON.stringify(lineText.charAt(pos - 1)))
+
+  // Handle jumping over spaced tags (  #tag)
   if (
     pos + 3 <= lineText.length &&
     lineText.substring(pos, pos + 3).match(/^  #/)
@@ -1960,49 +2145,522 @@ function handleTagRightArrow(view) {
     }
   }
 
+  // Handle jumping after closed tags, but only if there are spaces after
   const closedMatches = [...lineText.matchAll(CLOSED_TAG_REGEX)]
+  console.log('closedMatches:', closedMatches.length)
+
   for (const match of closedMatches) {
     const tagStart = match.index
     const tagEnd = tagStart + match[0].length
+    console.log(
+      'closed tag:',
+      match[0],
+      'tagStart:',
+      tagStart,
+      'tagEnd:',
+      tagEnd,
+      'pos:',
+      pos
+    )
+
     if (pos === tagEnd) {
-      console.log('Right arrow at end of closed tag detected')
-      const newPos = head + 2
-      view.dispatch({
-        selection: { anchor: newPos },
-        userEvent: 'select'
-      })
-      return true
+      console.log('*** Right arrow at end of closed tag detected ***')
+
+      // Check what comes after the tag
+      const afterTag = lineText.substring(pos)
+      console.log('afterTag:', JSON.stringify(afterTag))
+
+      // Only handle if there are at least 2 spaces after the tag
+      if (afterTag.startsWith('  ')) {
+        const newPos = head + 2
+        console.log('Has 2 spaces after, jumping to:', newPos)
+        view.dispatch({
+          selection: { anchor: newPos },
+          userEvent: 'select'
+        })
+        return true
+      }
+
+      console.log(
+        'No 2 spaces after tag, returning false to allow default behavior'
+      )
+      // If there are no spaces or just one space, let default behavior handle it
+      return false
     }
   }
 
+  // Handle jumping after simple tags, but only if there are spaces after
   const simpleMatches = [...lineText.matchAll(TAG_REGEX)]
+  console.log('simpleMatches:', simpleMatches.length)
+
   for (const match of simpleMatches) {
     const tagStart = match.index
     const tagEnd = tagStart + match[0].length
+    console.log(
+      'simple tag:',
+      match[0],
+      'tagStart:',
+      tagStart,
+      'tagEnd:',
+      tagEnd,
+      'pos:',
+      pos
+    )
+
     if (pos === tagEnd) {
-      console.log('Right arrow at end of simple tag detected')
-      const newPos = head + 2
+      console.log('*** Right arrow at end of simple tag detected ***')
+
+      // Check what comes after the tag
+      const afterTag = lineText.substring(pos)
+      console.log('afterTag:', JSON.stringify(afterTag))
+
+      // Only handle if there are at least 2 spaces after the tag
+      if (afterTag.startsWith('  ')) {
+        const newPos = head + 2
+        console.log('Has 2 spaces after, jumping to:', newPos)
+        view.dispatch({
+          selection: { anchor: newPos },
+          userEvent: 'select'
+        })
+        return true
+      }
+
+      console.log(
+        'No 2 spaces after tag, returning false to allow default behavior'
+      )
+      // If there are no spaces or just one space, let default behavior handle it
+      return false
+    }
+  }
+
+  console.log('No tag matches found, returning false')
+  return false
+}
+
+function handleTagEnterKey(view) {
+  console.log('*** ENTER HANDLER CALLED ***')
+  const { state } = view
+  const head = state.selection.main.head
+  const activeTag = state.field(activeTagState)
+
+  console.log('=== ENTER KEY DEBUG ===')
+  console.log('head:', head)
+  console.log('activeTag.active:', activeTag.active)
+
+  if (head < state.doc.length - 2) {
+    const twoSpacesAfter = state.doc.sliceString(head, head + 2)
+
+    if (twoSpacesAfter === '  ') {
+      // Check if there's a hash after these 2 spaces
+      const charAfterSpaces = state.doc.sliceString(head + 2, head + 3)
+
+      if (charAfterSpaces === '#') {
+        console.log('*** ENTER pressed at beginning of 2 spaces before tag ***')
+
+        const line = state.doc.lineAt(head)
+
+        // Get everything from cursor position to end of line
+        const restOfLine = state.doc.sliceString(head, line.to)
+
+        console.log('Rest of line to move:', JSON.stringify(restOfLine))
+
+        // Insert newline at cursor position and move the rest (including the 2 spaces)
+        view.dispatch({
+          changes: {
+            from: head,
+            to: line.to,
+            insert: '\n' + restOfLine
+          },
+          selection: { anchor: head + 1 },
+          effects: activeTag.active
+            ? setActiveTagEffect.of({
+                active: false,
+                from: null,
+                allowSpaces: false
+              })
+            : undefined,
+          userEvent: 'input.type'
+        })
+        return true
+      }
+    }
+  }
+
+  // Check if we're immediately after a tag character with auto-inserted spaces
+  if (head >= 2) {
+    const twoSpacesAfter = state.doc.sliceString(head, head + 2)
+    console.log('twoSpacesAfter:', JSON.stringify(twoSpacesAfter))
+
+    if (twoSpacesAfter === '  ') {
+      console.log('*** Found exactly 2 spaces after cursor ***')
+
+      const line = state.doc.lineAt(head)
+
+      // Check if we're right after a tag by looking at the text before cursor
+      const textBefore = state.doc.sliceString(line.from, head)
+      console.log('textBefore:', JSON.stringify(textBefore))
+
+      // Look for any tag pattern ending right at cursor
+      const simpleMatches = [...textBefore.matchAll(TAG_REGEX)]
+      const closedMatches = [...textBefore.matchAll(CLOSED_TAG_REGEX)]
+
+      console.log('simpleMatches:', simpleMatches.length)
+      console.log('closedMatches:', closedMatches.length)
+
+      let isAfterTag = false
+
+      // Check simple tags
+      if (simpleMatches.length > 0) {
+        const lastMatch = simpleMatches[simpleMatches.length - 1]
+        const tagEnd = line.from + lastMatch.index + lastMatch[0].length
+        console.log('Last simple tag ends at:', tagEnd, 'cursor at:', head)
+        if (tagEnd === head) {
+          isAfterTag = true
+          console.log('*** CURSOR IS RIGHT AFTER SIMPLE TAG ***')
+        }
+      }
+
+      // Check closed tags
+      if (closedMatches.length > 0) {
+        const lastMatch = closedMatches[closedMatches.length - 1]
+        const tagEnd = line.from + lastMatch.index + lastMatch[0].length
+        console.log('Last closed tag ends at:', tagEnd, 'cursor at:', head)
+        if (tagEnd === head) {
+          isAfterTag = true
+          console.log('*** CURSOR IS RIGHT AFTER CLOSED TAG ***')
+        }
+      }
+
+      // Check active tag
+      if (activeTag.active && head > activeTag.from) {
+        const tagContent = state.doc.sliceString(activeTag.from, head)
+        console.log('Active tag content:', JSON.stringify(tagContent))
+        if (tagContent.startsWith('#') && tagContent.length > 1) {
+          isAfterTag = true
+          console.log('*** CURSOR IS RIGHT AFTER ACTIVE TAG ***')
+        }
+      }
+
+      if (isAfterTag) {
+        console.log('*** EXECUTING ENTER HANDLER ***')
+
+        // Count total spaces after cursor
+        let totalSpaces = 2
+        while (
+          head + totalSpaces < state.doc.length &&
+          state.doc.sliceString(head + totalSpaces, head + totalSpaces + 1) ===
+            ' '
+        ) {
+          totalSpaces++
+        }
+        console.log('Total spaces after cursor:', totalSpaces)
+
+        // Get content after all spaces
+        const contentAfterSpaces = state.doc.sliceString(
+          head + totalSpaces,
+          line.to
+        )
+        console.log('Content after spaces:', JSON.stringify(contentAfterSpaces))
+
+        if (contentAfterSpaces.length > 0) {
+          // There's content after the spaces - move it to next line
+          console.log('*** Moving content to next line ***')
+          view.dispatch({
+            changes: {
+              from: head + totalSpaces,
+              to: line.to,
+              insert: '\n' + contentAfterSpaces
+            },
+            selection: { anchor: head + totalSpaces + 1 },
+            effects: activeTag.active
+              ? setActiveTagEffect.of({
+                  active: false,
+                  from: null,
+                  allowSpaces: false
+                })
+              : undefined,
+            userEvent: 'input.type'
+          })
+          return true
+        } else {
+          // Just spaces, no content - insert newline AFTER the 2 spaces
+          console.log(
+            '*** No content after spaces, inserting newline after exactly 2 spaces ***'
+          )
+          view.dispatch({
+            changes: {
+              from: head + 2,
+              to: head + 2,
+              insert: '\n'
+            },
+            selection: { anchor: head + 3 },
+            effects: activeTag.active
+              ? setActiveTagEffect.of({
+                  active: false,
+                  from: null,
+                  allowSpaces: false
+                })
+              : undefined,
+            userEvent: 'input.type'
+          })
+          return true
+        }
+      }
+    }
+  }
+
+  // Now check for the case where cursor is within spaces after a tag
+  // (This handles the case where there are 3+ spaces and cursor is not right after the tag)
+  const line = state.doc.lineAt(head)
+  const textBefore = state.doc.sliceString(line.from, head)
+
+  // Look for tags that might have spaces after them
+  const simpleMatches = [...textBefore.matchAll(TAG_REGEX)]
+  const closedMatches = [...textBefore.matchAll(CLOSED_TAG_REGEX)]
+
+  let isWithinSpacesAfterTag = false
+
+  // Check simple tags
+  if (simpleMatches.length > 0) {
+    const lastMatch = simpleMatches[simpleMatches.length - 1]
+    const tagEnd = line.from + lastMatch.index + lastMatch[0].length
+
+    // Check if cursor is after this tag with spaces between
+    if (tagEnd < head) {
+      // Check if everything between tag and cursor is spaces
+      const betweenTagAndCursor = state.doc.sliceString(tagEnd, head)
+      if (
+        betweenTagAndCursor.length >= 2 &&
+        /^\s+$/.test(betweenTagAndCursor)
+      ) {
+        isWithinSpacesAfterTag = true
+        console.log('*** CURSOR IS WITHIN SPACES AFTER SIMPLE TAG ***')
+      }
+    }
+  }
+
+  // Check closed tags if not found
+  if (!isWithinSpacesAfterTag && closedMatches.length > 0) {
+    const lastMatch = closedMatches[closedMatches.length - 1]
+    const tagEnd = line.from + lastMatch.index + lastMatch[0].length
+
+    // Check if cursor is after this tag with spaces between
+    if (tagEnd < head) {
+      // Check if everything between tag and cursor is spaces
+      const betweenTagAndCursor = state.doc.sliceString(tagEnd, head)
+      if (
+        betweenTagAndCursor.length >= 2 &&
+        /^\s+$/.test(betweenTagAndCursor)
+      ) {
+        isWithinSpacesAfterTag = true
+        console.log('*** CURSOR IS WITHIN SPACES AFTER CLOSED TAG ***')
+      }
+    }
+  }
+
+  if (isWithinSpacesAfterTag) {
+    console.log(
+      '*** EXECUTING ENTER HANDLER: Cursor within spaces after tag ***'
+    )
+
+    // Get content after cursor position
+    const contentAfterCursor = state.doc.sliceString(head, line.to)
+    console.log('Content after cursor:', JSON.stringify(contentAfterCursor))
+
+    // Skip any remaining spaces and get actual content
+    let contentStart = 0
+    while (
+      contentStart < contentAfterCursor.length &&
+      contentAfterCursor.charAt(contentStart) === ' '
+    ) {
+      contentStart++
+    }
+
+    const actualContent = contentAfterCursor.substring(contentStart)
+    console.log('Actual content after spaces:', JSON.stringify(actualContent))
+
+    if (actualContent.length > 0) {
+      // There's content after the spaces - move it to next line
+      console.log('*** Moving content to next line ***')
       view.dispatch({
-        selection: { anchor: newPos },
-        userEvent: 'select'
+        changes: {
+          from: head + contentStart,
+          to: line.to,
+          insert: '\n' + actualContent
+        },
+        selection: { anchor: head + contentStart + 1 },
+        effects: activeTag.active
+          ? setActiveTagEffect.of({
+              active: false,
+              from: null,
+              allowSpaces: false
+            })
+          : undefined,
+        userEvent: 'input.type'
+      })
+      return true
+    } else {
+      // No content, just insert newline at cursor
+      console.log('*** No content, inserting newline at cursor ***')
+      view.dispatch({
+        changes: {
+          from: head,
+          to: head,
+          insert: '\n'
+        },
+        selection: { anchor: head + 1 },
+        effects: activeTag.active
+          ? setActiveTagEffect.of({
+              active: false,
+              from: null,
+              allowSpaces: false
+            })
+          : undefined,
+        userEvent: 'input.type'
       })
       return true
     }
   }
 
+  console.log('=== ENTER HANDLER RETURNING FALSE ===')
   return false
 }
+
+// Click handler for tag spacing
+export const tagClickHandler = EditorView.domEventHandlers({
+  click(event, view) {
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+    if (pos === null) return false
+
+    const line = view.state.doc.lineAt(pos)
+    const lineText = line.text
+    const posInLine = pos - line.from
+
+    // Debug logging
+    console.log('Click detected at pos:', pos, 'posInLine:', posInLine)
+    console.log('Line text:', JSON.stringify(lineText))
+
+    // Check a small range around the click position to handle edge cases
+    for (
+      let checkPos = Math.max(0, posInLine - 1);
+      checkPos <= Math.min(lineText.length - 1, posInLine + 1);
+      checkPos++
+    ) {
+      // Check if we're at or near a hash with 2 spaces before it
+      if (checkPos < lineText.length && lineText.charAt(checkPos) === '#') {
+        console.log('Found hash at position:', checkPos)
+
+        // Check if there are 2 spaces before this hash
+        if (
+          checkPos >= 2 &&
+          lineText.charAt(checkPos - 1) === ' ' &&
+          lineText.charAt(checkPos - 2) === ' '
+        ) {
+          console.log('Hash has 2 spaces before it, checking click position')
+
+          // If we clicked anywhere from the first space to the hash (inclusive),
+          // jump to the beginning of the spaces
+          if (posInLine >= checkPos - 2 && posInLine <= checkPos) {
+            console.log(
+              'Click is in the protected zone, jumping to start of spaces'
+            )
+            view.dispatch({
+              selection: { anchor: line.from + checkPos - 2 },
+              userEvent: 'select'
+            })
+            return true
+          }
+        }
+      }
+    }
+
+    // Also check if we clicked in a space that's part of a 2-space prefix before a hash
+    if (posInLine >= 0 && posInLine < lineText.length - 1) {
+      // Look ahead to see if there's a hash after some spaces
+      let spaceCount = 0
+      let checkIdx = posInLine
+
+      // Count spaces starting from current position
+      while (checkIdx < lineText.length && lineText.charAt(checkIdx) === ' ') {
+        spaceCount++
+        checkIdx++
+      }
+
+      // If we found a hash after spaces, check if it's a 2-space pattern
+      if (checkIdx < lineText.length && lineText.charAt(checkIdx) === '#') {
+        // Calculate where the 2 spaces before the hash would start
+        const spacesStart = checkIdx - 2
+
+        // If we clicked within the 2-space zone, jump to the beginning
+        if (
+          spacesStart >= 0 &&
+          posInLine >= spacesStart &&
+          posInLine < checkIdx &&
+          lineText.charAt(spacesStart) === ' ' &&
+          lineText.charAt(spacesStart + 1) === ' '
+        ) {
+          console.log('Click is within 2-space prefix, jumping to start')
+          view.dispatch({
+            selection: { anchor: line.from + spacesStart },
+            userEvent: 'select'
+          })
+          return true
+        }
+      }
+    }
+
+    console.log('No protected zone found, allowing normal click')
+    return false
+  }
+})
+
+// Selection guard to prevent cursor from being immediately left of hash with 2 spaces before it
+export const tagSelectionGuard = EditorView.updateListener.of((update) => {
+  if (update.selectionSet) {
+    const { state } = update
+    const head = state.selection.main.head
+
+    // Check if cursor is positioned immediately before a hash
+    if (head < state.doc.length) {
+      const charAfter = state.doc.sliceString(head, head + 1)
+
+      if (charAfter === '#') {
+        // Check if there are 2 spaces before this hash
+        if (head >= 2) {
+          const twoBefore = state.doc.sliceString(head - 2, head)
+
+          if (twoBefore === '  ') {
+            console.log(
+              'Selection guard: Cursor placed immediately before hash with 2 spaces, moving to start of spaces'
+            )
+
+            // Use setTimeout to avoid conflicts with the current update cycle
+            setTimeout(() => {
+              update.view.dispatch({
+                selection: { anchor: head - 2 },
+                userEvent: 'select'
+              })
+            }, 0)
+          }
+        }
+      }
+    }
+  }
+})
 
 export const tagExtensions = [
   activeTagState,
   tagStyling,
   tagCharacterHandler,
+  tagClickHandler,
+  tagSelectionGuard,
   keymap.of([
     { key: 'Space', run: handleTagSpaceKey },
     { key: '/', run: handleTagSlashKey },
     { key: 'Backspace', run: handleTagBackspaceKey },
     { key: 'Alt-Backspace', run: handleTagBackspaceKey },
     { key: 'ArrowLeft', run: handleTagLeftArrow },
-    { key: 'ArrowRight', run: handleTagRightArrow }
+    { key: 'Enter', run: handleTagEnterKey }
+    // { key: 'ArrowRight', run: handleTagRightArrow } // only for desktop
   ])
 ]

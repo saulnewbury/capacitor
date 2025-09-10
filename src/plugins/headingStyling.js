@@ -1,7 +1,7 @@
 // plugins/headingStyling.js
-import { ViewPlugin, Decoration } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
 import { RangeSetBuilder } from '@codemirror/state'
+import { Decoration, ViewPlugin } from '@codemirror/view'
 import { isInsidePromptBlock } from './promptExtension'
 
 export const headingStyling = ViewPlugin.fromClass(
@@ -10,9 +10,8 @@ export const headingStyling = ViewPlugin.fromClass(
       this.decorations = this.buildDecorations(view)
     }
     update(update) {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
-        this.decorations = this.buildDecorations(update.view)
-      }
+      // Always rebuild decorations on update, even if no specific changes
+      this.decorations = this.buildDecorations(update.view)
     }
     buildDecorations(view) {
       const builder = new RangeSetBuilder()
@@ -38,11 +37,19 @@ export const headingStyling = ViewPlugin.fromClass(
           const prefixLen = level + 1
           const hideEnd = line.from + prefixLen
           const contentEnd = line.to
-          const head = view.state.selection.main.head
+          const selection = view.state.selection.main
 
-          // 1) Mark the entire heading span, and only tag as "focused"
-          //    when cursor is between col 0 and end‑of‑line
-          const isFocused = head >= line.from && head <= contentEnd
+          // Only treat “focused” when the editor itself has browser focus
+          const editorHasBrowserFocus = view.hasFocus
+
+          const isFocused =
+            editorHasBrowserFocus &&
+            ((selection.empty &&
+              selection.head >= line.from &&
+              selection.head <= contentEnd) ||
+              (!selection.empty &&
+                selection.from <= contentEnd &&
+                selection.to >= line.from))
 
           builder.add(
             line.from,
@@ -55,7 +62,7 @@ export const headingStyling = ViewPlugin.fromClass(
             })
           )
 
-          // 2) Hide the hashes+space
+          // Hide the hashes+space
           builder.add(line.from, hideEnd, Decoration.replace({}))
         }
       })

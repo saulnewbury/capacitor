@@ -1,6 +1,6 @@
 // plugins/tabEnterHandler.js
-import { keymap } from '@codemirror/view'
 import { EditorSelection, Prec } from '@codemirror/state'
+import { keymap } from '@codemirror/view'
 
 export const tabEnterHandler = Prec.highest(
   keymap.of([
@@ -21,7 +21,8 @@ export const tabEnterHandler = Prec.highest(
         if (
           lineText.match(/^[ \t]+/) &&
           !lineText.match(/^[ \t]*[*-]\s/) &&
-          !lineText.match(/^[ \t]*\d+[.)]\s/)
+          !lineText.match(/^[ \t]*\d+[.)]\s/) &&
+          !lineText.match(/^[ \t]*#[a-zA-Z0-9_\/-]/) // Skip lines with tags
         ) {
           // First transaction: insert the newline
           const tr = state.update({

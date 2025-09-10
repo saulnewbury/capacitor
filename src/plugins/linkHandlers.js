@@ -1,648 +1,736 @@
-import { EditorView } from '@codemirror/view'
-import { Prec } from '@codemirror/state'
-import {
-  URL_REGEX,
-  EMAIL_REGEX,
-  MARKDOWN_LINK_REGEX,
-  getLinkAtPosition,
-  selectLinkText
-} from './linkRegex.js'
-import { safeOpenUrl, safeOpenEmail } from './linkUtils.js'
-import { createEditLinkDialog } from './linkDialog.js'
-import { setLinkPreviewState, getLinkPreviewState } from './linkStyling.js'
-import { setCustomLinkTitle, getCustomLinkTitle } from './linkPreview.js'
-
-// Helper function to get current displayed title from preview widget
-const getCurrentDisplayedTitle = (linkInfo, view) => {
-  // First check the global registry
-  const customTitle = getCustomLinkTitle(linkInfo.url, linkInfo.text)
-  if (customTitle) {
-    return customTitle
-  }
-
-  // Find the preview widget for this link in the DOM
-  const previewCards = document.querySelectorAll('.cm-link-preview-card')
-
-  for (const card of previewCards) {
-    const titleElement = card.querySelector('.preview-title')
-    const domainElement = card.querySelector('.preview-url span')
-
-    if (titleElement && domainElement) {
-      // Simple heuristic: check if this card matches our link
-      const cardDomain = domainElement.textContent
-      const linkDomain = extractDomainFromUrl(linkInfo.url)
-
-      if (
-        cardDomain === linkDomain ||
-        cardDomain.includes(linkDomain) ||
-        linkDomain.includes(cardDomain)
-      ) {
-        return titleElement.textContent
-      }
-    }
-  }
-
-  // Fallback to original text
-  return linkInfo.text
-}
-
-// Helper function to extract domain from URL
-const extractDomainFromUrl = (url) => {
-  try {
-    const urlWithProtocol = url.match(/^https?:\/\//) ? url : `https://${url}`
-    const domain = new URL(urlWithProtocol).hostname
-    return domain.replace(/^www\./, '')
-  } catch {
-    return url.length > 25 ? url.substring(0, 22) + '...' : url
-  }
-}
-
-// Updated save handler that stores custom titles
-const createUpdatedSaveHandler = (linkInfo, view, targetElement = null) => {
-  return (editedData) => {
-    console.log('Edited data received:', editedData) // Debug log
-
-    // Handle the edited link data
-    if (linkInfo.position) {
-      const { start, end } = linkInfo.position
-      let newLinkText = ''
-
-      // IMPORTANT: Store the custom title globally if it's different from the address
-      if (editedData.title && editedData.title !== editedData.address) {
-        setCustomLinkTitle(editedData.address, linkInfo.text, editedData.title)
-      }
-
-      if (linkInfo.type === 'markdown') {
-        // Update preview state
-        setLinkPreviewState(
-          editedData.title,
-          editedData.address,
-          editedData.showPreview
-        )
-
-        // FIXED: Separate preview mode from title logic
-        if (editedData.showPreview) {
-          // Preview mode: always create markdown
-          const linkTitle = editedData.title || editedData.address
-          newLinkText = `[${linkTitle}](${editedData.address})`
-        } else if (
-          editedData.title &&
-          editedData.title !== editedData.address
-        ) {
-          // Non-preview mode: only create markdown if title is different
-          newLinkText = `[${editedData.title}](${editedData.address})`
-        } else {
-          // Non-preview mode: plain URL if no distinct title
-          newLinkText = editedData.address
-        }
-      } else if (linkInfo.type === 'email') {
-        // FIXED: Separate preview mode from title logic
-        if (editedData.showPreview) {
-          // Preview mode: always create markdown
-          const linkTitle = editedData.title || editedData.address
-          setLinkPreviewState(
-            linkTitle,
-            `mailto:${editedData.address}`,
-            editedData.showPreview
-          )
-          newLinkText = `[${linkTitle}](mailto:${editedData.address})`
-        } else if (
-          editedData.title &&
-          editedData.title !== editedData.address
-        ) {
-          // Non-preview mode: only create markdown if title is different
-          const linkTitle = editedData.title
-          setLinkPreviewState(linkTitle, `mailto:${editedData.address}`, false)
-          newLinkText = `[${linkTitle}](mailto:${editedData.address})`
-        } else {
-          // Non-preview mode: plain email
-          newLinkText = editedData.address
-        }
-      } else {
-        // For plain URLs
-        // FIXED: Separate preview mode from title logic
-        if (editedData.showPreview) {
-          // Preview mode: always create markdown
-          const linkTitle = editedData.title || editedData.address
-          setLinkPreviewState(
-            linkTitle,
-            editedData.address,
-            editedData.showPreview
-          )
-          newLinkText = `[${linkTitle}](${editedData.address})`
-        } else if (
-          editedData.title &&
-          editedData.title !== editedData.address
-        ) {
-          // Non-preview mode: only create markdown if title is different
-          setLinkPreviewState(editedData.title, editedData.address, false)
-          newLinkText = `[${editedData.title}](${editedData.address})`
-        } else {
-          // Non-preview mode: plain URL
-          newLinkText = editedData.address
-        }
-      }
-
-      console.log('Replacing text:', {
-        from: start,
-        to: end,
-        insert: newLinkText
-      }) // Debug log
-
-      // Replace the text in the editor
-      view.dispatch({
-        changes: {
-          from: start,
-          to: end,
-          insert: newLinkText
-        }
-      })
-    }
-
-    // Clean up temporary element if it exists
-    if (targetElement && targetElement.parentNode) {
-      targetElement.parentNode.removeChild(targetElement)
-    }
-  }
-}
-
-// Custom context menu for links (with your styling preferences)
-export const createLinkContextMenu = (
-  linkInfo,
-  event,
-  view,
-  targetElement = null
-) => {
-  // Remove any existing context menu
-  const existingMenu = document.querySelector('.link-context-menu')
-  if (existingMenu) {
-    existingMenu.remove()
-  }
-
-  // Create context menu element
-  const menu = document.createElement('div')
-  menu.className = 'link-context-menu'
-  menu.style.cssText = `
-    position: fixed;
-    top: ${event.clientY}px;
-    left: ${event.clientX}px;
-    // background: rgb(228, 228, 227);
-    background: #bbbbbb78;
-    border: .8px solid rgba(0, 0, 0, 0.15);
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-    padding: 4px 0;
-    min-width: 180px;
-    z-index: 10000;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 13px;
-    color: #000;
-    backdrop-filter: blur(10px);
-
-  `
-
-  // Helper function to create menu items
-  const createMenuItem = (text, onClick) => {
-    const item = document.createElement('div')
-    item.className = 'context-menu-item'
-    item.style.cssText = `
-      padding: 2px 16px;
-      cursor: pointer;
-      border: none;
-      background: none;
-      width: 100%;
-      text-align: left;
-      display: block;
-      color: #000;
-      font-size: 13px;
-    `
-    item.textContent = text
-
-    // Hover effects
-    item.addEventListener('mouseenter', () => {
-      item.style.backgroundColor = 'rgba(0, 0, 0, 0.08)'
-    })
-    item.addEventListener('mouseleave', () => {
-      item.style.backgroundColor = 'transparent'
-    })
-
-    item.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-      onClick()
-      menu.remove()
-    })
-
-    return item
-  }
-
-  // Add menu items based on link type
-  if (linkInfo.type === 'email') {
-    menu.appendChild(
-      createMenuItem('Open Email Client', () => safeOpenEmail(linkInfo.url))
-    )
-    menu.appendChild(
-      createMenuItem('Copy Email Address', () =>
-        navigator.clipboard.writeText(linkInfo.url)
-      )
-    )
-  } else {
-    // URL or markdown link
-    const url = linkInfo.url
-
-    menu.appendChild(createMenuItem('Open Link', () => safeOpenUrl(url)))
-    menu.appendChild(createMenuItem('Open in New Tab', () => safeOpenUrl(url)))
-    menu.appendChild(
-      createMenuItem('Copy Link Address', () => {
-        // Ensure URL has protocol for copying
-        let copyUrl = url
-        if (!url.match(/^https?:\/\//i)) {
-          copyUrl = url.startsWith('www.') ? `https://${url}` : `https://${url}`
-        }
-        navigator.clipboard.writeText(copyUrl)
-      })
-    )
-
-    if (linkInfo.type === 'markdown') {
-      menu.appendChild(
-        createMenuItem('Copy Link Text', () =>
-          navigator.clipboard.writeText(linkInfo.text)
-        )
-      )
-    }
-  }
-
-  // Add a separator and additional custom actions
-  const separator = document.createElement('div')
-  separator.style.cssText = `
-    height: 1px;
-    background-color: rgba(0, 0, 0, 0.1);
-    margin: 4px 0;
-  `
-  menu.appendChild(separator)
-
-  // Edit Link action with dialog
-  menu.appendChild(
-    createMenuItem('Edit Link', () => {
-      // Get current preview state
-      const currentPreviewState =
-        linkInfo.type === 'markdown'
-          ? getLinkPreviewState(linkInfo.text, linkInfo.url)
-          : false
-
-      // Use current displayed title for preview links
-      const currentDisplayedTitle = getCurrentDisplayedTitle(linkInfo, view)
-
-      const linkInfoWithPreview = {
-        ...linkInfo,
-        text: currentDisplayedTitle, // Use current displayed title
-        isPreview: currentPreviewState
-      }
-
-      createEditLinkDialog(
-        linkInfoWithPreview,
-        view,
-        createUpdatedSaveHandler(linkInfo, view, targetElement),
-        targetElement
-      )
-    })
-  )
-
-  // Add to document
-  document.body.appendChild(menu)
-
-  // Position adjustment to keep menu on screen
-  const rect = menu.getBoundingClientRect()
-  if (rect.right > window.innerWidth) {
-    menu.style.left = `${event.clientX - rect.width}px`
-  }
-  if (rect.bottom > window.innerHeight) {
-    menu.style.top = `${event.clientY - rect.height}px`
-  }
-
-  // Close menu when clicking outside
-  const closeMenu = (e) => {
-    if (!menu.contains(e.target)) {
-      menu.remove()
-      document.removeEventListener('click', closeMenu)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }
-
-  // Close menu with Escape key
-  const handleKeyDown = (e) => {
-    if (e.key === 'Escape') {
-      menu.remove()
-      document.removeEventListener('click', closeMenu)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }
-
-  // Add event listeners after a small delay to prevent immediate closing
-  setTimeout(() => {
-    document.addEventListener('click', closeMenu)
-    document.addEventListener('keydown', handleKeyDown)
-  }, 100)
-}
-
-// Click handler for links with selection detection
-export const linkClickHandler = EditorView.domEventHandlers({
-  click: (event, view) => {
-    // Only handle left clicks, ignore right clicks and other buttons
-    if (event.button !== 0) return false
-
-    // Check if this was the end of a text selection drag
-    const selection = view.state.selection.main
-    if (!selection.empty) {
-      // If there's a selection, don't treat this as a link click
-      return false
-    }
-
-    // Check if the user is currently selecting text (mousedown + mousemove + mouseup)
-    // We'll track this with a flag
-    if (view._isSelecting) {
-      return false
-    }
-
-    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
-    if (pos === null) return false
-
-    // First, check if we clicked on a pencil icon widget
-    const target = event.target
-    if (
-      target &&
-      (target.closest('.cm-markdown-link-pencil') ||
-        target.classList.contains('cm-markdown-link-pencil'))
-    ) {
-      // Find the link that contains this position
-      const linkInfo = getLinkAtPosition(view, pos)
-      if (linkInfo && linkInfo.type === 'markdown') {
-        event.preventDefault()
-        event.stopPropagation()
-
-        // Get current preview state
-        const currentPreviewState = getLinkPreviewState(
-          linkInfo.text,
-          linkInfo.url
-        )
-
-        // Use current displayed title for preview links
-        const currentDisplayedTitle = getCurrentDisplayedTitle(linkInfo, view)
-
-        const linkInfoWithPreview = {
-          ...linkInfo,
-          text: currentDisplayedTitle, // Use current displayed title
-          isPreview: currentPreviewState
-        }
-
-        createEditLinkDialog(
-          linkInfoWithPreview,
-          view,
-          createUpdatedSaveHandler(linkInfo, view, null)
-        )
-        return true
-      }
-    }
-
-    const line = view.state.doc.lineAt(pos)
-    const lineText = line.text
-    const posInLine = pos - line.from
-
-    // Check for markdown links first (highest priority)
-    const markdownMatches = [...lineText.matchAll(MARKDOWN_LINK_REGEX)]
-    for (const mdMatch of markdownMatches) {
-      if (
-        posInLine >= mdMatch.index &&
-        posInLine < mdMatch.index + mdMatch[0].length
-      ) {
-        const linkText = mdMatch[1]
-        const linkUrl = mdMatch[2]
-
-        // Calculate positions more precisely
-        const textStart = mdMatch.index + 1 // After opening [
-        const textEnd = textStart + linkText.length
-        const urlStart = textEnd + 2 // After ](
-        const urlEnd = urlStart + linkUrl.length
-
-        // Determine what was clicked based on position in the raw text
-        const clickedOnText = posInLine >= textStart && posInLine < textEnd
-        const clickedOnUrl = posInLine >= urlStart && posInLine < urlEnd
-
-        event.preventDefault()
-        event.stopPropagation()
-
-        if (clickedOnText || clickedOnUrl) {
-          // Open URL when clicking on text or URL
-          // Check if it's an email in the URL part
-          if (
-            linkUrl.match(
-              /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$/
-            ) ||
-            linkUrl.startsWith('mailto:')
-          ) {
-            safeOpenEmail(linkUrl.replace('mailto:', ''))
-          } else {
-            safeOpenUrl(linkUrl)
-          }
-        }
-
-        return true
-      }
-    }
-
-    // Check for plain URLs (but not if they're part of markdown links)
-    URL_REGEX.lastIndex = 0
-    let match
-    while ((match = URL_REGEX.exec(lineText)) !== null) {
-      if (
-        posInLine >= match.index &&
-        posInLine < match.index + match[0].length
-      ) {
-        // Check if it's not part of a markdown link
-        const isInMarkdownLink = markdownMatches.some(
-          (mdMatch) =>
-            match.index >= mdMatch.index &&
-            match.index < mdMatch.index + mdMatch[0].length
-        )
-
-        if (!isInMarkdownLink) {
-          // Check if this is a right-click (context menu) or regular click
-          if (event.button === 2) {
-            // Right-click - let the context menu handle it
-            return false
-          }
-
-          event.preventDefault()
-          event.stopPropagation()
-
-          // Check if Ctrl/Cmd key is held (indicating edit intent)
-          if (event.ctrlKey || event.metaKey) {
-            // Create linkInfo for the plain URL
-            const linkInfo = {
-              type: 'url',
-              url: match[0],
-              text: match[0],
-              position: {
-                start: line.from + match.index,
-                end: line.from + match.index + match[0].length
-              }
-            }
-
-            // Get the DOM element that represents this URL for positioning
-            const startCoords = view.coordsAtPos(line.from + match.index)
-            const endCoords = view.coordsAtPos(
-              line.from + match.index + match[0].length
-            )
-
-            if (startCoords && endCoords) {
-              // Create a temporary element that spans the exact URL width
-              const tempElement = document.createElement('span')
-              tempElement.style.position = 'absolute'
-              tempElement.style.left = `${startCoords.left}px`
-              tempElement.style.top = `${startCoords.top}px`
-              tempElement.style.width = `${
-                endCoords.right - startCoords.left
-              }px`
-              tempElement.style.height = `${
-                startCoords.bottom - startCoords.top
-              }px`
-              tempElement.style.pointerEvents = 'none'
-              tempElement.style.visibility = 'hidden'
-              document.body.appendChild(tempElement)
-
-              createEditLinkDialog(
-                linkInfo,
-                view,
-                createUpdatedSaveHandler(linkInfo, view, tempElement),
-                tempElement
-              )
-
-              // Clean up the temporary element after a delay
-              setTimeout(() => {
-                if (tempElement.parentNode) {
-                  tempElement.parentNode.removeChild(tempElement)
-                }
-              }, 100)
-            } else {
-              // Fallback to default positioning if coordinates not available
-              createEditLinkDialog(
-                linkInfo,
-                view,
-                createUpdatedSaveHandler(linkInfo, view, null),
-                null
-              )
-            }
-          } else {
-            // Regular click - open the URL
-            safeOpenUrl(match[0])
-          }
-          return true
-        }
-      }
-    }
-
-    // Check for emails (but not if they're part of markdown links)
-    EMAIL_REGEX.lastIndex = 0
-    while ((match = EMAIL_REGEX.exec(lineText)) !== null) {
-      if (
-        posInLine >= match.index &&
-        posInLine < match.index + match[0].length
-      ) {
-        // Check if it's not part of a markdown link
-        const isInMarkdownLink = markdownMatches.some(
-          (mdMatch) =>
-            match.index >= mdMatch.index &&
-            match.index < mdMatch.index + mdMatch[0].length
-        )
-
-        if (!isInMarkdownLink) {
-          event.preventDefault()
-          event.stopPropagation()
-          safeOpenEmail(match[0])
-          return true
-        }
-      }
-    }
-
-    return false
-  },
-
-  // Track when user starts selecting to prevent link clicks during selection
-  mousedown: (event, view) => {
-    // Reset the selection flag
-    view._isSelecting = false
-    view._mouseDownTime = Date.now()
-    view._mouseDownPos = { x: event.clientX, y: event.clientY }
-    return false
-  },
-
-  mousemove: (event, view) => {
-    // If mouse is down and moving, user is likely selecting
-    if (view._mouseDownTime && Date.now() - view._mouseDownTime > 50) {
-      const moveDistance =
-        Math.abs(event.clientX - view._mouseDownPos.x) +
-        Math.abs(event.clientY - view._mouseDownPos.y)
-      if (moveDistance > 5) {
-        view._isSelecting = true
-      }
-    }
-    return false
-  },
-
-  mouseup: (event, view) => {
-    // Clear the mouse down tracking after a short delay
-    setTimeout(() => {
-      view._isSelecting = false
-      view._mouseDownTime = null
-      view._mouseDownPos = null
-    }, 10)
-    return false
-  }
-})
-
-// High-priority event handler that captures events before other handlers
-export const highPriorityLinkHandler = EditorView.domEventHandlers({
-  contextmenu: (event, view) => {
-    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
-    if (pos !== null) {
-      const linkInfo = getLinkAtPosition(view, pos)
-      if (linkInfo) {
-        event.preventDefault()
-        event.stopImmediatePropagation()
-
-        // Select the full link text before showing context menu
-        selectLinkText(view, pos, linkInfo)
-
-        // For plain URLs, get positioning info
-        let targetElement = null
-        if (linkInfo.type === 'url') {
-          const startCoords = view.coordsAtPos(linkInfo.position.start)
-          const endCoords = view.coordsAtPos(linkInfo.position.end)
-          if (startCoords && endCoords) {
-            // Create a temporary element for positioning
-            targetElement = document.createElement('span')
-            targetElement.style.position = 'absolute'
-            targetElement.style.left = `${startCoords.left}px`
-            targetElement.style.top = `${startCoords.top}px`
-            targetElement.style.width = `${
-              endCoords.right - startCoords.left
-            }px`
-            targetElement.style.height = `${
-              startCoords.bottom - startCoords.top
-            }px`
-            targetElement.style.pointerEvents = 'none'
-            targetElement.style.visibility = 'hidden'
-            document.body.appendChild(targetElement)
-          }
-        }
-
-        createLinkContextMenu(linkInfo, event, view, targetElement)
-        return true
-      }
-    }
-    return false
-  }
-})
-
-// Export high priority handler with precedence
-export const highPriorityHandler = Prec.highest(highPriorityLinkHandler)
+// // linkHandlers.js - Debug version to identify markdown link click issue
+
+// import { Prec } from '@codemirror/state'
+// import { EditorView } from '@codemirror/view'
+// import { createLinkSaveHandler, getCurrentDisplayedTitle } from './linkCore.js'
+// import { createEditLinkDialog } from './linkDialog.js'
+// import { getLinkPreviewState } from './linkPreviewState.js'
+// import {
+//   EMAIL_REGEX,
+//   MARKDOWN_LINK_REGEX,
+//   URL_REGEX,
+//   getLinkAtPosition,
+//   selectLinkText
+// } from './linkRegex.js'
+// import { safeOpenEmail, safeOpenUrl } from './linkUtils.js'
+
+// // Global editor view storage for native bridge communication
+// let currentEditorView = null
+
+// export const setCurrentEditorView = (view) => {
+//   currentEditorView = view
+// }
+
+// export const getCurrentEditorView = () => {
+//   return currentEditorView
+// }
+
+// // Helper function to check if click is on a preview card
+// const isClickOnPreviewCard = (event) => {
+//   const target = event.target
+//   return target.closest('.cm-link-preview-card') !== null
+// }
+
+// // Helper function to check if a position is within a preview widget range
+// const isPositionInPreviewWidget = (view, pos) => {
+//   const line = view.state.doc.lineAt(pos)
+//   const lineText = line.text
+//   const posInLine = pos - line.from
+
+//   // Check for markdown links that are in preview mode
+//   const markdownMatches = [...lineText.matchAll(MARKDOWN_LINK_REGEX)]
+//   for (const match of markdownMatches) {
+//     const linkText = match[1]
+//     const linkUrl = match[2]
+//     const linkStart = match.index
+//     const linkEnd = linkStart + match[0].length
+
+//     // If this is a preview link and position falls within its range
+//     if (
+//       getLinkPreviewState(linkText, linkUrl) &&
+//       posInLine >= linkStart &&
+//       posInLine < linkEnd
+//     ) {
+//       return {
+//         isInWidget: true,
+//         linkStart: line.from + linkStart,
+//         linkEnd: line.from + linkEnd,
+//         linkText,
+//         linkUrl
+//       }
+//     }
+//   }
+
+//   return { isInWidget: false }
+// }
+
+// // Helper function to handle cursor placement near preview widgets
+// const handleCursorNearPreview = (view, pos, event) => {
+//   const line = view.state.doc.lineAt(pos)
+//   const lineText = line.text
+//   const posInLine = pos - line.from
+
+//   // Check for markdown links that are in preview mode
+//   const markdownMatches = [...lineText.matchAll(MARKDOWN_LINK_REGEX)]
+//   for (const match of markdownMatches) {
+//     const linkText = match[1]
+//     const linkUrl = match[2]
+//     const linkStart = match.index
+//     const linkEnd = linkStart + match[0].length
+//     const absoluteLinkStart = line.from + linkStart
+//     const absoluteLinkEnd = line.from + linkEnd
+
+//     if (getLinkPreviewState(linkText, linkUrl)) {
+//       // If clicking within or very close to the preview widget range
+//       if (posInLine >= linkStart - 2 && posInLine <= linkEnd + 2) {
+//         // Determine if click is closer to start or end of the widget
+//         const distanceToStart = Math.abs(posInLine - linkStart)
+//         const distanceToEnd = Math.abs(posInLine - linkEnd)
+
+//         let targetPosition
+//         if (distanceToStart <= distanceToEnd) {
+//           // Place cursor before the link
+//           targetPosition = absoluteLinkStart
+//         } else {
+//           // Place cursor after the link
+//           targetPosition = absoluteLinkEnd
+//         }
+
+//         // Set the cursor position
+//         view.dispatch({
+//           selection: {
+//             anchor: targetPosition,
+//             head: targetPosition
+//           }
+//         })
+
+//         return true
+//       }
+//     }
+//   }
+
+//   return false
+// }
+
+// // Send link context menu request to React Native
+// const sendLinkContextMenuToNative = (linkInfo, event, view) => {
+//   console.log('📱 Sending context menu request to React Native', linkInfo)
+
+//   if (window.ReactNativeWebView) {
+//     const message = {
+//       type: 'SHOW_LINK_CONTEXT_MENU',
+//       payload: {
+//         linkInfo: {
+//           type: linkInfo.type,
+//           text: linkInfo.text,
+//           url: linkInfo.url,
+//           position: linkInfo.position
+//         },
+//         coordinates: {
+//           x: event.clientX || 0,
+//           y: event.clientY || 0
+//         }
+//       }
+//     }
+
+//     window.ReactNativeWebView.postMessage(JSON.stringify(message))
+//   } else {
+//     console.warn('⚠️ ReactNativeWebView not available')
+//   }
+// }
+
+// // Handle edit link action from React Native
+// const handleEditLinkFromNative = (linkInfo) => {
+//   console.log('✏️ Handling edit link from native', linkInfo)
+
+//   const view = getCurrentEditorView()
+
+//   if (!view) {
+//     console.error('❌ No editor view available for edit action')
+//     return
+//   }
+
+//   // Get current preview state
+//   const currentPreviewState =
+//     linkInfo.type === 'markdown'
+//       ? getLinkPreviewState(linkInfo.text, linkInfo.url)
+//       : false
+
+//   // Use current displayed title for preview links
+//   const currentDisplayedTitle = getCurrentDisplayedTitle(linkInfo, view)
+
+//   const linkInfoWithPreview = {
+//     ...linkInfo,
+//     text: currentDisplayedTitle,
+//     isPreview: currentPreviewState
+//   }
+
+//   createEditLinkDialog(
+//     linkInfoWithPreview,
+//     view,
+//     createLinkSaveHandler(linkInfo, view, null),
+//     null
+//   )
+// }
+
+// // Handle link actions sent from React Native
+// const handleNativeLinkAction = (payload) => {
+//   const { action, linkInfo } = payload
+//   console.log(`🎯 Handling native link action: ${action}`, linkInfo)
+
+//   switch (action) {
+//     case 'open_email':
+//       safeOpenEmail(linkInfo.url)
+//       break
+
+//     case 'open_url':
+//       safeOpenUrl(linkInfo.url)
+//       break
+
+//     case 'copy_email':
+//     case 'copy_url':
+//     case 'copy_text':
+//       console.log(`📋 Copy action handled natively: ${action}`)
+//       break
+
+//     case 'edit_link':
+//       handleEditLinkFromNative(linkInfo)
+//       break
+
+//     default:
+//       console.warn('❓ Unknown link action:', action)
+//   }
+// }
+
+// // Setup native bridge listeners
+// const setupNativeBridge = () => {
+//   console.log('🌉 Setting up native bridge listeners')
+
+//   window.addEventListener('message', (event) => {
+//     try {
+//       const data = JSON.parse(event.data)
+
+//       if (data.type === 'LINK_ACTION') {
+//         handleNativeLinkAction(data.payload)
+//       }
+//     } catch (error) {
+//       console.warn('⚠️ Failed to parse message from React Native:', error)
+//     }
+//   })
+// }
+
+// // Main click handler with extensive debugging
+// export const linkClickHandler = EditorView.domEventHandlers({
+//   click: (event, view) => {
+//     setCurrentEditorView(view)
+
+//     // Only handle left clicks
+//     if (event.button !== 0) return false
+
+//     // Debug logging
+//     console.log('=== CLICK DEBUG START ===')
+//     console.log('Click event target:', event.target)
+//     console.log('Target className:', event.target.className)
+//     console.log('Target tagName:', event.target.tagName)
+//     if (event.target.parentElement) {
+//       console.log('Parent className:', event.target.parentElement.className)
+//     }
+
+//     // IMPORTANT: Skip if click is on a preview card
+//     if (isClickOnPreviewCard(event)) {
+//       console.log('👆 Click on preview card detected - skipping link handler')
+//       return false
+//     }
+
+//     // Check if we clicked on an element with cm-markdown-link-text class
+//     const target = event.target
+//     let linkTextElement = null
+
+//     if (
+//       target.classList &&
+//       target.classList.contains('cm-markdown-link-text')
+//     ) {
+//       linkTextElement = target
+//       console.log('Found cm-markdown-link-text on target')
+//     } else if (
+//       target.parentElement &&
+//       target.parentElement.classList &&
+//       target.parentElement.classList.contains('cm-markdown-link-text')
+//     ) {
+//       linkTextElement = target.parentElement
+//       console.log('Found cm-markdown-link-text on parent')
+//     } else {
+//       // Check if we're inside a span with the class
+//       let currentElement = target
+//       while (currentElement && currentElement !== view.contentDOM) {
+//         if (
+//           currentElement.classList &&
+//           currentElement.classList.contains('cm-markdown-link-text')
+//         ) {
+//           linkTextElement = currentElement
+//           console.log('Found cm-markdown-link-text by traversing up')
+//           break
+//         }
+//         currentElement = currentElement.parentElement
+//       }
+//     }
+
+//     if (linkTextElement) {
+//       console.log('👆 Click on markdown link text element detected')
+
+//       // Get the position and find the corresponding markdown link
+//       const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+//       console.log('Position from coords:', pos)
+
+//       if (pos !== null) {
+//         const line = view.state.doc.lineAt(pos)
+//         const lineText = line.text
+//         console.log('Line text:', lineText)
+//         console.log('Line from:', line.from, 'Line to:', line.to)
+
+//         // Find which markdown link this click belongs to
+//         const markdownMatches = [...lineText.matchAll(MARKDOWN_LINK_REGEX)]
+//         console.log('Found markdown matches:', markdownMatches.length)
+
+//         for (const match of markdownMatches) {
+//           const linkStart = line.from + match.index
+//           const textStart = linkStart + 1 // After [
+//           const textEnd = textStart + match[1].length // Before ]
+
+//           console.log('Checking match:', {
+//             text: match[1],
+//             url: match[2],
+//             linkStart,
+//             textStart,
+//             textEnd,
+//             clickPos: pos
+//           })
+
+//           // Check if our click position falls within this link's text range
+//           if (pos >= textStart && pos < textEnd) {
+//             const linkUrl = match[2]
+//             const linkText = match[1]
+
+//             const isPreview = getLinkPreviewState(linkText, linkUrl)
+//             console.log('Is preview link?', isPreview)
+
+//             // Make sure this isn't a preview link (those handle clicks differently)
+//             if (!isPreview) {
+//               console.log('Opening markdown link:', linkUrl)
+//               event.preventDefault()
+//               event.stopPropagation()
+
+//               // Open the URL
+//               if (
+//                 linkUrl.match(
+//                   /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$/
+//                 ) ||
+//                 linkUrl.startsWith('mailto:')
+//               ) {
+//                 safeOpenEmail(linkUrl.replace('mailto:', ''))
+//               } else {
+//                 safeOpenUrl(linkUrl)
+//               }
+//               return true
+//             } else {
+//               console.log('Skipping because it is a preview link')
+//             }
+//           }
+//         }
+//         console.log('No matching markdown link found for position')
+//       }
+//     } else {
+//       console.log('Not a markdown link text element')
+//     }
+
+//     console.log('=== CLICK DEBUG END ===')
+
+//     // Check for text selection
+//     const selection = view.state.selection.main
+//     if (!selection.empty || view._isSelecting) {
+//       return false
+//     }
+
+//     const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+//     if (pos === null) return false
+
+//     // Check if position is within a preview widget range
+//     const previewCheck = isPositionInPreviewWidget(view, pos)
+//     if (previewCheck.isInWidget) {
+//       console.log(
+//         '👆 Click position is within preview widget - handling cursor placement'
+//       )
+
+//       // Handle cursor placement near preview widgets
+//       if (handleCursorNearPreview(view, pos, event)) {
+//         event.preventDefault()
+//         event.stopPropagation()
+//         return true
+//       }
+
+//       return false
+//     }
+
+//     const line = view.state.doc.lineAt(pos)
+//     const lineText = line.text
+//     const posInLine = pos - line.from
+
+//     // Check for markdown links (for clicks on brackets or other syntax parts)
+//     const markdownMatches = [...lineText.matchAll(MARKDOWN_LINK_REGEX)]
+//     for (const mdMatch of markdownMatches) {
+//       if (
+//         posInLine >= mdMatch.index &&
+//         posInLine < mdMatch.index + mdMatch[0].length
+//       ) {
+//         const linkUrl = mdMatch[2]
+//         event.preventDefault()
+//         event.stopPropagation()
+
+//         // Single click opens the link
+//         if (
+//           linkUrl.match(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$/) ||
+//           linkUrl.startsWith('mailto:')
+//         ) {
+//           safeOpenEmail(linkUrl.replace('mailto:', ''))
+//         } else {
+//           safeOpenUrl(linkUrl)
+//         }
+//         return true
+//       }
+//     }
+
+//     // Check for plain URLs
+//     URL_REGEX.lastIndex = 0
+//     let match
+//     while ((match = URL_REGEX.exec(lineText)) !== null) {
+//       if (
+//         posInLine >= match.index &&
+//         posInLine < match.index + match[0].length
+//       ) {
+//         const isInMarkdownLink = markdownMatches.some(
+//           (mdMatch) =>
+//             match.index >= mdMatch.index &&
+//             match.index < mdMatch.index + mdMatch[0].length
+//         )
+
+//         if (!isInMarkdownLink) {
+//           event.preventDefault()
+//           event.stopPropagation()
+
+//           // Double-click for edit, single click to open
+//           if (event.detail === 2) {
+//             const linkInfo = {
+//               type: 'url',
+//               url: match[0],
+//               text: match[0],
+//               position: {
+//                 start: line.from + match.index,
+//                 end: line.from + match.index + match[0].length
+//               }
+//             }
+//             handleEditLinkFromNative(linkInfo)
+//           } else {
+//             safeOpenUrl(match[0])
+//           }
+//           return true
+//         }
+//       }
+//     }
+
+//     // Check for emails
+//     EMAIL_REGEX.lastIndex = 0
+//     while ((match = EMAIL_REGEX.exec(lineText)) !== null) {
+//       if (
+//         posInLine >= match.index &&
+//         posInLine < match.index + match[0].length
+//       ) {
+//         const isInMarkdownLink = markdownMatches.some(
+//           (mdMatch) =>
+//             match.index >= mdMatch.index &&
+//             match.index < mdMatch.index + mdMatch[0].length
+//         )
+
+//         if (!isInMarkdownLink) {
+//           event.preventDefault()
+//           event.stopPropagation()
+//           safeOpenEmail(match[0])
+//           return true
+//         }
+//       }
+//     }
+
+//     return false
+//   },
+
+//   // Mouse tracking for selection detection
+//   mousedown: (event, view) => {
+//     setCurrentEditorView(view)
+
+//     // Skip if click is on a preview card
+//     if (isClickOnPreviewCard(event)) {
+//       return false
+//     }
+
+//     view._isSelecting = false
+//     view._mouseDownTime = Date.now()
+//     view._mouseDownPos = { x: event.clientX, y: event.clientY }
+//     return false
+//   },
+
+//   mousemove: (event, view) => {
+//     if (view._mouseDownTime && Date.now() - view._mouseDownTime > 50) {
+//       const moveDistance =
+//         Math.abs(event.clientX - view._mouseDownPos.x) +
+//         Math.abs(event.clientY - view._mouseDownPos.y)
+//       if (moveDistance > 5) {
+//         view._isSelecting = true
+//       }
+//     }
+//     return false
+//   },
+
+//   mouseup: (event, view) => {
+//     setTimeout(() => {
+//       view._isSelecting = false
+//       view._mouseDownTime = null
+//       view._mouseDownPos = null
+//     }, 10)
+//     return false
+//   }
+// })
+
+// // Context menu handler for right-click
+// export const contextMenuHandler = EditorView.domEventHandlers({
+//   contextmenu: (event, view) => {
+//     setCurrentEditorView(view)
+
+//     // Skip if right-click is on a preview card
+//     if (isClickOnPreviewCard(event)) {
+//       console.log(
+//         '👆 Right-click on preview card detected - skipping context menu handler'
+//       )
+//       return false
+//     }
+
+//     const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+//     if (pos !== null) {
+//       const linkInfo = getLinkAtPosition(view, pos)
+//       if (linkInfo) {
+//         console.log('🖱️ Right-click context menu on link', linkInfo)
+//         event.preventDefault()
+//         event.stopImmediatePropagation()
+
+//         // Select the full link text
+//         selectLinkText(view, pos, linkInfo)
+
+//         // Send to React Native
+//         sendLinkContextMenuToNative(linkInfo, event, view)
+//         return true
+//       }
+//     }
+//     return false
+//   }
+// })
+
+// // Touch handlers for mobile long press - WITH HAPTIC FEEDBACK
+// export const touchHandler = EditorView.domEventHandlers({
+//   touchstart: (event, view) => {
+//     setCurrentEditorView(view)
+//     view._touchStartTime = Date.now()
+//     view._touchStartPos = {
+//       x: event.touches[0].clientX,
+//       y: event.touches[0].clientY
+//     }
+//     view._hasMoved = false
+
+//     // Check if we're touching a pencil icon
+//     const target = event.target
+//     if (
+//       target &&
+//       (target.closest('.cm-markdown-link-pencil') ||
+//         target.classList.contains('cm-markdown-link-pencil'))
+//     ) {
+//       // Let the PencilWidget or UrlReplacementWidget handle the touch event
+//       return false
+//     }
+
+//     // Skip if touch is on a preview card
+//     if (isClickOnPreviewCard(event)) {
+//       console.log('👆 Touch on preview card detected - skipping touch handler')
+//       return false
+//     }
+
+//     // Continue with existing touch handling for links
+//     const pos = view.posAtCoords({
+//       x: event.touches[0].clientX,
+//       y: event.touches[0].clientY
+//     })
+
+//     if (pos !== null) {
+//       const linkInfo = getLinkAtPosition(view, pos)
+//       if (linkInfo) {
+//         view._potentialLinkTouch = linkInfo
+//         view._touchPos = pos
+
+//         console.log('👆 Touch started on link - preventing default selection')
+//         // Prevent iOS text selection for links
+//         event.preventDefault()
+
+//         // Set up haptic feedback timer
+//         view._hapticTimer = setTimeout(() => {
+//           if (!view._hasMoved && view._potentialLinkTouch) {
+//             console.log(
+//               '👆 Long press threshold reached - triggering haptic feedback'
+//             )
+
+//             if (window.ReactNativeWebView) {
+//               window.ReactNativeWebView.postMessage(
+//                 JSON.stringify({
+//                   type: 'HAPTIC_FEEDBACK',
+//                   style: 'medium'
+//                 })
+//               )
+//             }
+
+//             view._hapticTriggered = true
+//           }
+//         }, 500)
+//       }
+//     }
+
+//     return false
+//   },
+
+//   touchmove: (event, view) => {
+//     if (view._touchStartPos) {
+//       const moveDistance =
+//         Math.abs(event.touches[0].clientX - view._touchStartPos.x) +
+//         Math.abs(event.touches[0].clientY - view._touchStartPos.y)
+//       if (moveDistance > 10) {
+//         view._hasMoved = true
+//         // Clear potential link touch and haptic timer if we've moved too much
+//         view._potentialLinkTouch = null
+//         if (view._hapticTimer) {
+//           clearTimeout(view._hapticTimer)
+//           view._hapticTimer = null
+//         }
+//       }
+//     }
+//     return false
+//   },
+
+//   touchend: (event, view) => {
+//     // Clear the haptic timer if it's still running
+//     if (view._hapticTimer) {
+//       clearTimeout(view._hapticTimer)
+//       view._hapticTimer = null
+//     }
+
+//     const touchDuration = Date.now() - (view._touchStartTime || 0)
+
+//     // Long press detection (500ms+ and minimal movement)
+//     if (touchDuration >= 500 && !view._hasMoved && view._potentialLinkTouch) {
+//       console.log('👆 Long press detected on link', touchDuration)
+
+//       event.preventDefault()
+//       event.stopPropagation()
+
+//       // Clear any iOS default selection that might have started
+//       if (window.getSelection) {
+//         window.getSelection().removeAllRanges()
+//       }
+
+//       // Ensure editor focus and select the link text
+//       view.focus()
+//       selectLinkText(view, view._touchPos, view._potentialLinkTouch)
+
+//       // Send to React Native
+//       sendLinkContextMenuToNative(view._potentialLinkTouch, event, view)
+
+//       // Reset tracking
+//       view._touchStartTime = null
+//       view._touchStartPos = null
+//       view._hasMoved = false
+//       view._potentialLinkTouch = null
+//       view._touchPos = null
+//       view._hapticTriggered = false
+
+//       return true
+//     }
+
+//     // NEW: Handle regular tap on markdown link
+//     if (touchDuration < 500 && !view._hasMoved && view._potentialLinkTouch) {
+//       console.log('👆 Regular tap on link detected', touchDuration)
+
+//       const linkInfo = view._potentialLinkTouch
+
+//       // Check if it's a markdown link that's not in preview mode
+//       if (
+//         linkInfo.type === 'markdown' &&
+//         !getLinkPreviewState(linkInfo.text, linkInfo.url)
+//       ) {
+//         console.log('Opening markdown link from tap:', linkInfo.url)
+//         event.preventDefault()
+//         event.stopPropagation()
+
+//         // Open the URL
+//         if (
+//           linkInfo.url.match(
+//             /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$/
+//           ) ||
+//           linkInfo.url.startsWith('mailto:')
+//         ) {
+//           safeOpenEmail(linkInfo.url.replace('mailto:', ''))
+//         } else {
+//           safeOpenUrl(linkInfo.url)
+//         }
+
+//         // Reset tracking
+//         view._touchStartTime = null
+//         view._touchStartPos = null
+//         view._hasMoved = false
+//         view._potentialLinkTouch = null
+//         view._touchPos = null
+//         view._hapticTriggered = false
+
+//         return true
+//       }
+//     }
+
+//     // Reset tracking
+//     view._touchStartTime = null
+//     view._touchStartPos = null
+//     view._hasMoved = false
+//     view._potentialLinkTouch = null
+//     view._touchPos = null
+//     view._hapticTriggered = false
+//     return false
+//   }
+// })
+
+// // High priority handler combining context menu and touch
+// export const highPriorityHandler = Prec.highest([
+//   contextMenuHandler,
+//   touchHandler
+// ])
+
+// // Initialize native bridge on module load
+// console.log('🚀 Initializing link handlers with native bridge')
+// setupNativeBridge()
+
+// // Test native bridge connection
+// setTimeout(() => {
+//   if (window.ReactNativeWebView) {
+//     console.log('✅ ReactNativeWebView detected')
+//     window.ReactNativeWebView.postMessage(
+//       JSON.stringify({
+//         type: 'console',
+//         level: 'info',
+//         message: 'Link handlers initialized successfully',
+//         timestamp: new Date().toISOString()
+//       })
+//     )
+//   } else {
+//     console.log('⚠️ ReactNativeWebView not detected - running in browser mode')
+//   }
+// }, 1000)

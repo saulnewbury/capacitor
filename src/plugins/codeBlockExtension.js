@@ -1,11 +1,11 @@
-import { EditorView, Decoration, ViewPlugin } from '@codemirror/view'
 import {
-  StateField,
-  StateEffect,
-  RangeSet,
   EditorState,
+  RangeSet,
+  StateEffect,
+  StateField,
   Transaction
 } from '@codemirror/state'
+import { Decoration, EditorView, ViewPlugin } from '@codemirror/view'
 import { isInsidePromptBlock } from './promptExtension' // Import the isInsidePromptBlock function
 
 // Effect for adding a new code block decoration
@@ -134,7 +134,7 @@ const codeBlockTransactionFilter = EditorState.transactionFilter.of((tr) => {
               }
             } catch (e) {
               // If any errors occur during calculation, don't try to remove end backticks
-              console.warn('Error calculating end backtick position:', e)
+              // console.warn('Error calculating end backtick position:', e)
               endLineChange = null
             }
           }

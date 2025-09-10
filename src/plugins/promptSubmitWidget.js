@@ -36,7 +36,7 @@ export class PromptSubmitButton extends WidgetType {
       if (currentBlock) {
         handlePromptSubmit(view, currentBlock)
       } else {
-        console.warn('Could not find prompt block for line', this.endLineNumber)
+        // console.warn('Could not find prompt block for line', this.endLineNumber)
       }
     })
 
@@ -70,12 +70,12 @@ export function handlePromptSubmit(view, block) {
 
   // Don't submit empty prompts
   if (!prompt) {
-    console.log('Empty prompt, not submitting')
+    // console.log('Empty prompt, not submitting')
     return
   }
 
-  console.log('Submitting prompt:', prompt)
-  console.log('Block details:', block) // This should now show the correct line numbers
+  // console.log('Submitting prompt:', prompt)
+  // console.log('Block details:', block) // This should now show the correct line numbers
 
   // Dispatch a custom event that your main app can listen to
   const event = new CustomEvent('cm-prompt-submit', {

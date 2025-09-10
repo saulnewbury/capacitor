@@ -2,31 +2,45 @@ import { EditorView } from '@codemirror/view'
 
 export const commonStyles = EditorView.theme({
   /* Editor */
-
   '&': {
-    backgroundColor: 'transparent',
-    height: '100%'
+    minHeight: '100%'
   },
-  '.markdown-editor .cm-editor.cm-focused': {
-    outline: 'transparent !important'
+  '.cm-editor': {
+    minHeight: '100%'
   },
+  '.cm-scroller': {
+    overflowX: 'visible !important',
+    overflowY: 'auto !important',
+    boxSizing: 'border-box',
+    minHeight: '100%',
+    height: 'auto',
+    paddingLeft: '30px',
+    paddingRight: '30px'
+  },
+
   '.cm-content': {
     fontSize: '16px',
     lineHeight: '1.7',
-    padding: '50px',
-    // Disable native selection styling
-    caretColor: 'transparent', // Hide native caret
-    '&::selection': { backgroundColor: 'transparent' },
-    '& *::selection': { backgroundColor: 'transparent' } // Hide native selection in editor children
+    caretColor: 'red',
+    paddingBottom: '80vh',
+    minHeight: 'calc(100vh - 100px + 1px)' // Force scroll by adding 1px
   },
-  '.cm-scroller': {
-    overflow: 'visible !important',
-    padding: '50px'
-  },
+
   // Line wrapping styles
   '.cm-line': {
+    paddingLeft: '4px !important', // Remove any line-level left padding
+    paddingRight: '4px !important', // Remove any line-level left padding
+    marginLeft: '0 !important', // Remove any line-level left margin
+    textIndent: '0 !important',
     wordWrap: 'break-word', // Ensure words break properly
-    whiteSpace: 'pre-wrap' // Preserve whitespace but allow wrapping
+    whiteSpace: 'pre-wrap', // Preserve whitespace but allow wrapping
+
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word'
+  },
+
+  '.cm-line[style*="--list-text-indent"]': {
+    boxSizing: 'border-box'
   },
 
   /**
@@ -46,11 +60,11 @@ export const commonStyles = EditorView.theme({
     content: "''",
     borderRadius: '1000px',
     backgroundColor: 'rgba(83, 90, 101, 0.164)',
-    width: 'calc(100% + 1rem)',
+    width: 'calc(100% + .8rem)',
     height: 'calc(100% + 0.35rem)',
     position: 'absolute',
     top: '50%',
-    left: '-0.5rem',
+    left: '-0.4rem',
     transform: 'translateY(-50%)',
     display: 'inline-block'
   },
@@ -104,13 +118,13 @@ export const commonStyles = EditorView.theme({
     paddingLeft: '0.6em'
   },
   /*  0em for 2 or more digits  */
-  '.ordered-list-number.multi-digit-number': {
-    paddingReft: '0em'
-  },
+  // '.ordered-list-number.multi-digit-number': {
+  //   paddingLeft: '0em'
+  // },
   /* KEEP AS INLINE (DONT USE INLINE BLOCK) */
   '.custom-bullet, .ordered-list-number': {
     textAlign: 'right',
-    boxSizing: 'borderBox',
+    boxSizing: 'border-box',
     minWidth: '2.1em',
     fontWeight: 500,
     lineHeight: 1.7,
@@ -118,36 +132,54 @@ export const commonStyles = EditorView.theme({
   },
 
   /**
+   * Link
+   */
+
+  'preview-title': {
+    fontSize: '1.3rem',
+    fontWeight: 700
+  },
+
+  /**
    * Headings
    */
 
-  '.cm-heading-1, .cm-heading-2, .cm-heading-3, .cm-heading-4, .cm-heading-5, .cm-heading-6':
-    {
-      position: 'relative',
-      fontWeight: 700
-    },
+  '.cm-heading': {
+    position: 'relative',
+    fontWeight: 700,
+    fontFamily:
+      '"Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+  },
+
+  '.cm-heading, .cm-heading span': {
+    display: 'contents'
+  },
 
   // Heading font sizes
   '.cm-line:has(.cm-heading-1)': {
-    fontSize: '2rem'
+    fontSize: '1.6rem',
+    fontWeight: 700
   },
 
   '.cm-line:has(.cm-heading-2)': {
-    fontSize: '1.5rem'
+    fontSize: '1.3rem',
+    fontWeight: 700
   },
 
   '.cm-line:has(.cm-heading-3)': {
-    fontSize: '1.25rem'
+    fontSize: '1.15rem',
+    fontWeight: 700
   },
 
   '.cm-heading-4, .cm-heading-5, .cm-heading-6': {
-    fontSize: '1rem'
+    fontSize: '1rem',
+    fontWeight: 700
   },
 
   /* Heading bottom margin */
   '.cm-line:has(.cm-heading)': {
-    marginBottom: '0.1em',
-    lineHeight: 1.4
+    marginBottom: '.25em',
+    lineHeight: 1.2
   },
 
   /**
@@ -157,16 +189,17 @@ export const commonStyles = EditorView.theme({
   '.cm-heading span[contenteditable]:first-of-type': {
     position: 'absolute',
     cursor: 'pointer',
-    verticalAlign: 'sub',
-    // left: '-1.8rem',
-    // width: '1.8rem'
-    left: '-1.4rem',
-    width: '1.4rem'
+    paddingRight: '0.25em',
+    display: 'none'
   },
 
-  '.cm-heading-1 span[contenteditable]:first-of-type::before': {
-    fontSize: '0.8rem',
-    fontWeight: 500
+  '.cm-heading span[contenteditable]:first-of-type::before': {
+    fontSize: '0.6rem',
+    fontWeight: 500,
+    /* Hide all heading indicators by default */
+    opacity: 0,
+    width: '0px',
+    transition: 'opacity 1s ease-in-out'
   },
 
   '.cm-heading-1 [contenteditable]:first-of-type::before': {
@@ -193,99 +226,17 @@ export const commonStyles = EditorView.theme({
     content: "'h6'"
   },
 
-  /* Hide all heading indicators by default */
-  '.cm-heading span[contenteditable]:first-of-type::before': {
-    /* visibility: hidden; */
-    opacity: 0,
+  /* Show the “hN” indicator only when the heading line has .cm-heading-focused */
+  '.cm-heading.cm-heading-focused span[contenteditable]::before': {
+    opacity: 1,
     transition: 'opacity 1s ease-in-out'
   },
 
-  /* Show the “hN” indicator only when the heading line has .cm-heading-focused */
-  '.cm-heading.cm-heading-focused span[contenteditable]:first-of-type::before':
-    {
-      opacity: 1,
-      transition: 'opacity 1s ease-in-out'
-    },
-
-  /**
-   * Prompt
-   */
-
-  '.cm-prompt': {
-    fontSize: '1em',
-    color: '#000',
-    lineHeight: 1.7,
-    position: 'relative',
-    borderLeft: '0.5px #cccccc solid',
-    borderRight: '0.5px #cccccc solid',
-    paddingLeft:
-      '1.2rem !important' /* Add some padding on the left for visual clarity */,
-    paddingRight:
-      '1rem !important' /* Add some padding on the left for visual clarity */,
-    overflow: 'hidden'
-  },
-
-  '.cm-prompt-fence': {
-    opacity: 0
-  },
-
-  /* First line in a prompt block */
-  '.cm-prompt.cm-prompt-start': {
-    borderTopLeftRadius: '0.8rem',
-    borderTopRightRadius: '0.8rem',
-    paddingTop: 0,
-    borderTop: '0.5px #cccccc solid',
-    lineHeight: 1.2
-  },
-
-  /* Last line in a prompt block */
-  '.cm-prompt.cm-prompt-end': {
-    borderBottomLeftRadius: '0.8rem',
-    borderBottomRightRadius: '0.8rem',
-    paddingBottom: 0,
-    borderBottom: '0.5px #cccccc solid',
-    lineHeight: 3.5
-  },
-
-  '.cm-prompt::before': {
-    content: "''",
-    position: 'absolute',
-    zIndex: -2,
-    left: '0',
-    right: '0',
-    top: '0',
-    bottom: '0',
-    width: '100%',
-    height: '100%'
-  },
-
-  '.cm-prompt-placeholder::after': {
-    content: "'Ask anything...'",
-    fontSize: 'var(--prompt-font-size)',
-    position: 'absolute',
-    left: '1.2rem',
-    top: '0',
-    cursor: 'text'
-  },
-
-  '.cm-prompt-submit-button': {
-    position: 'absolute',
-    right: '13px',
-    bottom: '13px',
-    color: 'white',
-    border: 'none',
-    borderRadius: '10px',
-    height: '2.2rem',
-    width: '2.2rem',
-    cursor: 'pointer',
-    boxSizing: 'border-box',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '1.2rem',
-    fontWeight: 'bold',
-    transition: 'all 0.2s ease',
-    zIndex: 10
+  '.cm-heading.cm-heading-focused span[contenteditable]': {
+    position: 'unset',
+    display: 'inline-block'
+    // width: '1.4rem',
+    // left: '-1.4rem'
   },
 
   /**
@@ -293,23 +244,23 @@ export const commonStyles = EditorView.theme({
    */
 
   '.cm-content .cm-code-block': {
-    fontSize: '0.9em',
+    fontSize: '16px',
+    lineHeight: 1.75,
     position: 'relative',
     paddingLeft: '1rem !important',
     paddingRight: '1rem !important',
-    borderLeft: '0.5px var(--code-block-boder-color) solid',
-    borderRight: '0.5px var(--code-block-boder-color) solid',
-    overflow: 'hidden'
+    overflow: 'hidden',
+    boxSizing: 'border-box'
   },
   '.cm-code-block.cm-code-block-start': {
     borderTopLeftRadius: '0.5em',
-    borderTopRightRadius: '0.5em',
-    paddingTop: 0
+    borderTopRightRadius: '0.5em'
+    // paddingTop: 0
   },
   '.cm-code-block.cm-code-block-end': {
     borderBottomLeftRadius: '0.5em',
-    borderBottomRightRadius: '0.5em',
-    paddingBottom: 0
+    borderBottomRightRadius: '0.5em'
+    // paddingBottom: 0
   },
   '.cm-code-block.cm-code-block-start span, .cm-code-block.cm-code-block-end span':
     {
@@ -317,7 +268,9 @@ export const commonStyles = EditorView.theme({
     },
   '.cm-code-block::before': {
     content: "''",
+    boxSizing: 'border-box',
     position: 'absolute',
+    display: 'block',
     zIndex: -2,
     left: 0,
     right: 0,
@@ -325,14 +278,7 @@ export const commonStyles = EditorView.theme({
     bottom: 0,
     width: '100%',
     height: '100%'
+    // transform: 'translateZ(0)',
+    // backfaceVisibility: 'hidden'
   }
-
-  /**
-   * Links
-   */
-
-  // '.cm-line:has(.cm-link-preview-card)': {
-  //   // lineHeight: 0,
-  //   display: 'inline-block'
-  // }
 })

@@ -1,345 +1,309 @@
+// linkPreview.js - Updated with typical link preview layout
+
 import { WidgetType } from '@codemirror/view'
-import { MetadataFetcher } from './metadataFetcher.js'
+import { ICONS, createIcon } from './iconHelpers.js'
+import {
+  createLinkSaveHandler,
+  getCustomLinkTitle,
+  setCustomLinkTitle
+} from './linkCore.js'
+import { createEditLinkDialog } from './linkDialog.js'
+import { getLinkPreviewState } from './linkPreviewState.js'
+import { metadataFetcher } from './metadataFetcher.js'
 
-// Global metadata fetcher instance
-const metadataFetcher = new MetadataFetcher()
-
-// Global registry to track custom titles for links
-const customTitleRegistry = new Map()
-
-// Helper function to create a unique key for a link
-const createLinkKey = (url, originalText) => `${url}::${originalText}`
-
-// Helper function to set custom title globally
-export const setCustomLinkTitle = (url, originalText, customTitle) => {
-  const key = createLinkKey(url, originalText)
-  customTitleRegistry.set(key, customTitle)
-
-  // Update any existing preview widgets for this link
-  const previewCards = document.querySelectorAll('.cm-link-preview-card')
-  previewCards.forEach((card) => {
-    const titleElement = card.querySelector('.preview-title')
-    const domainElement = card.querySelector('.preview-url span')
-
-    if (titleElement && domainElement) {
-      // Simple heuristic to match the card to the link
-      const cardDomain = domainElement.textContent
-      const linkDomain = extractDomainFromUrl(url)
-
-      if (
-        cardDomain === linkDomain ||
-        cardDomain.includes(linkDomain) ||
-        linkDomain.includes(cardDomain)
-      ) {
-        titleElement.textContent = customTitle
-      }
-    }
-  })
-}
-
-// Helper function to get custom title globally
-export const getCustomLinkTitle = (url, originalText) => {
-  const key = createLinkKey(url, originalText)
-  return customTitleRegistry.get(key)
-}
-
-// Helper function to extract domain from URL
-const extractDomainFromUrl = (url) => {
-  try {
-    const urlWithProtocol = url.match(/^https?:\/\//) ? url : `https://${url}`
-    const domain = new URL(urlWithProtocol).hostname
-    return domain.replace(/^www\./, '')
-  } catch {
-    return url.length > 25 ? url.substring(0, 22) + '...' : url
-  }
-}
-
-// Link Preview Widget for replacing links with preview cards
 export class LinkPreviewWidget extends WidgetType {
   constructor(linkInfo, view) {
     super()
     this.linkInfo = linkInfo
     this.view = view
     this.previewData = this.generateInitialPreview(linkInfo.url)
+    this.domElement = null
 
-    // Check if this link has a custom title in the global registry
+    console.log('🔗 LinkPreviewWidget created for:', linkInfo.url)
+
+    // Check if this link has a custom title
     const customTitle = getCustomLinkTitle(linkInfo.url, linkInfo.text)
     if (customTitle) {
       this.hasCustomTitle = true
       this.previewData.title = customTitle
     } else if (linkInfo.text && linkInfo.text !== linkInfo.url) {
-      // Check if this link already has a custom title (different from URL)
       this.hasCustomTitle = true
       this.previewData.title = linkInfo.text
-      // Store it in the registry
       setCustomLinkTitle(linkInfo.url, linkInfo.text, linkInfo.text)
     } else {
       this.hasCustomTitle = false
     }
 
-    // Start fetching real metadata to replace initial data
+    // Start fetching real metadata
     this.fetchRealMetadata()
   }
 
-  /**
-   * Update the title and mark it as custom (manually edited)
-   */
-  setCustomTitle(newTitle) {
-    this.hasCustomTitle = true
-    this.previewData.title = newTitle
-
-    // Update the DOM immediately if it exists
-    if (this.domElement) {
-      const titleElement = this.domElement.querySelector('.preview-title')
-      if (titleElement) {
-        titleElement.textContent = newTitle
-      }
-    }
-  }
-
-  /**
-   * Get the current title displayed in the preview
-   */
-  getCurrentDisplayedTitle() {
-    if (this.domElement) {
-      const titleElement = this.domElement.querySelector('.preview-title')
-      if (titleElement) {
-        return titleElement.textContent
-      }
-    }
-    // Fallback to preview data
-    return this.previewData.title
-  }
-
-  /**
-   * Fetch real metadata and update the preview
-   */
   async fetchRealMetadata() {
     try {
-      const realMetadata = await metadataFetcher.fetchMetadata(
+      console.log(
+        '🔍 LinkPreview: Starting metadata fetch for:',
         this.linkInfo.url
       )
 
-      // Update the preview data, but preserve custom title if it exists
+      const realMetadata = await metadataFetcher.fetchMetadata(
+        this.linkInfo.url
+      )
+      // console.log('✅ LinkPreview: Received metadata:', realMetadata)
+
+      // Update our preview data
       this.previewData = {
         ...realMetadata,
-        // Only use fetched title if we don't have a custom title
         title: this.hasCustomTitle ? this.previewData.title : realMetadata.title
       }
 
-      // Find and update the existing DOM element if it exists
+      // console.log('🔄 LinkPreview: Updated preview data:', this.previewData)
+
+      // Update the DOM if it exists
       if (this.domElement) {
-        this.updateDOMWithRealData(this.previewData)
+        this.updateDOMContent(this.previewData)
       }
     } catch (error) {
-      console.warn(
-        'Failed to fetch real metadata, keeping initial data:',
-        error
-      )
-      // Keep using initial data if real fetch fails
+      console.warn('⚠️ LinkPreview: Failed to fetch metadata:', error)
     }
   }
 
-  /**
-   * Update the existing DOM element with real data
-   */
-  updateDOMWithRealData(data) {
-    if (!this.domElement) return
+  updateDOMContent(data) {
+    console.log('LinkPreview: Updating DOM with data:', data)
+
+    if (!this.domElement) {
+      console.warn('LinkPreview: No DOM element to update')
+      return
+    }
 
     // Update title
     const titleElement = this.domElement.querySelector('.preview-title')
-    if (titleElement) {
+    if (titleElement && data.title) {
       titleElement.textContent = data.title
+      console.log('Updated title to:', data.title)
     }
 
-    // Update domain
-    const domainElement = this.domElement.querySelector('.preview-url span')
-    if (domainElement) {
-      domainElement.textContent = this.clampText(data.domain, 25)
+    // Update link text (authors or domain)
+    const linkTextElement = this.domElement.querySelector('.preview-link-text')
+    if (linkTextElement) {
+      if (
+        data.author &&
+        (Array.isArray(data.author)
+          ? data.author.length > 0
+          : data.author.trim())
+      ) {
+        // Display authors
+        const authorText = Array.isArray(data.author)
+          ? data.author.join(', ')
+          : data.author
+        const clampedAuthorText = this.clampText(authorText, 20)
+        linkTextElement.textContent = clampedAuthorText
+        linkTextElement.title = `By ${authorText} • ${data.domain}`
+        console.log('Updated authors to:', clampedAuthorText)
+      } else if (data.domain) {
+        // Fallback to domain
+        const clampedDomain = this.clampText(data.domain, 15)
+        linkTextElement.textContent = clampedDomain
+        linkTextElement.title = data.domain
+        console.log('Updated domain to:', clampedDomain)
+      }
     }
 
-    // Update image and container styling based on image type
-    const imgElement = this.domElement.querySelector(
-      '.preview-image-container img'
+    // Update favicon
+    const faviconElement = this.domElement.querySelector('.preview-favicon')
+    if (faviconElement && data.favicon) {
+      faviconElement.src = data.favicon
+      faviconElement.style.display = 'inline-block'
+      console.log('Updated favicon to:', data.favicon)
+    }
+
+    // Handle content display based on type
+    this.updateContentDisplay(data)
+  }
+
+  updateContentDisplay(data) {
+    console.log(
+      '🖼️ LinkPreview: Updating content display for type:',
+      data.contentType
     )
+
     const imageContainer = this.domElement.querySelector(
       '.preview-image-container'
     )
-    const fallbackElement = this.domElement.querySelector(
-      '.preview-image-fallback'
+    const articleContainer = this.domElement.querySelector(
+      '.preview-article-container'
     )
 
-    if (imageContainer && data.image) {
-      // Show image, hide fallback
-      if (imgElement) {
-        imgElement.style.display = 'inline-block'
-        imgElement.src = data.image
+    if (data.contentType === 'article' && data.excerpt) {
+      // Show article text with title
+      const articleText = articleContainer.querySelector(
+        '.preview-article-text'
+      )
+      if (articleText) {
+        const titleHtml = `<div style="font-weight: bold; font-size: 11px; margin-bottom: 8px; line-height: 1.2;">${data.title}</div>`
+        const excerptHtml = data.excerpt.replace(/\n/g, '<br><br>')
+        articleText.innerHTML = titleHtml + excerptHtml
       }
-      if (fallbackElement) {
-        fallbackElement.style.display = 'none'
+      imageContainer.style.display = 'none'
+      articleContainer.style.display = 'block'
+    } else if (data.contentType === 'video' && data.image) {
+      // Show video thumbnail
+      const img = imageContainer.querySelector('img')
+      const fallback = imageContainer.querySelector('.preview-image-fallback')
+
+      if (img) {
+        img.src = data.image
+        img.style.display = 'block'
+      }
+      if (fallback) {
+        fallback.style.display = 'none'
       }
 
-      // Apply image-specific styling
-      this.applyImageStyling(data, imgElement, imageContainer)
-    } else if (fallbackElement) {
-      // Hide image, show fallback
-      if (imgElement) {
-        imgElement.style.display = 'none'
+      this.applyImageStyling(data, img, imageContainer)
+      imageContainer.style.display = 'flex'
+      articleContainer.style.display = 'none'
+    } else if (data.contentType === 'channel' && data.image) {
+      // Show channel avatar (same as video but square aspect ratio)
+      const img = imageContainer.querySelector('img')
+      const fallback = imageContainer.querySelector('.preview-image-fallback')
+
+      if (img) {
+        img.src = data.image
+        img.style.display = 'block'
       }
-      fallbackElement.style.display = 'flex'
+      if (fallback) {
+        fallback.style.display = 'none'
+      }
+
+      this.applyImageStyling(data, img, imageContainer)
+      imageContainer.style.display = 'flex'
+      articleContainer.style.display = 'none'
+    } else {
+      // Show fallback icon
+      const img = imageContainer.querySelector('img')
+      const fallback = imageContainer.querySelector('.preview-image-fallback')
+
+      if (img) {
+        img.style.display = 'none'
+      }
+      if (fallback) {
+        fallback.style.display = 'flex'
+      }
+
+      imageContainer.style.display = 'flex'
+      articleContainer.style.display = 'none'
     }
   }
 
-  /**
-   * Apply styling based on image type and characteristics
-   */
   applyImageStyling(data, imgElement, imageContainer) {
-    // Check if this is a YouTube thumbnail
     const isYouTubeThumbnail =
-      data.image.includes('img.youtube.com') ||
-      data.type === 'youtube' ||
-      data.type === 'youtube-short'
+      data.image &&
+      (data.image.includes('img.youtube.com') ||
+        data.type === 'youtube' ||
+        data.type === 'youtube-short')
 
-    // Check if this is likely a favicon (small icon)
-    const isFavicon =
-      data.image.includes('favicon') ||
-      data.image.includes('icon') ||
-      data.image.includes('apple-touch-icon') ||
-      data.imageAspectRatio === 1 // Square images are often icons
+    // Reset container styles for new layout
+    imageContainer.style.padding = '0'
+    imageContainer.style.height = 'auto'
+    imageContainer.style.minHeight = 'auto'
 
     if (isYouTubeThumbnail) {
-      // Style for YouTube thumbnails - full width with proper cropping
-      imageContainer.style.padding = '0'
-      imageContainer.style.height = '169px' // 300px * (9/16) = 168.75px
+      // Video thumbnails should be clipped to maintain aspect ratio
       imgElement.style.width = '100%'
-      imgElement.style.height = '100%'
-      imgElement.style.objectFit = 'cover'
-    } else if (isFavicon) {
-      // Style for favicon/icon
-      imageContainer.style.padding = '20px'
-      imageContainer.style.height = 'auto'
-      imgElement.style.width = '30%'
-      imgElement.style.height = '100%'
-      imgElement.style.objectFit = 'cover'
+      imgElement.style.height = 'auto'
+      imgElement.style.aspectRatio = '16 / 9'
+      imgElement.style.objectFit = 'cover' // This clips the image
     } else {
-      // Style for regular images
-      imageContainer.style.padding = '0'
-      imageContainer.style.height = 'auto'
-      imgElement.style.width = '50%'
-      imgElement.style.height = '100%'
-      imgElement.style.objectFit = 'cover'
+      // All other images (including YouTube channel avatars, favicons, etc.)
+      // should display at full width and show the complete image
+      imgElement.style.width = '100%'
+      imgElement.style.height = 'auto'
+      imgElement.style.aspectRatio = 'auto' // Let the natural aspect ratio determine height
+      imgElement.style.objectFit = 'contain' // Show the full image without clipping
     }
   }
 
-  /**
-   * Generate initial preview data based on URL patterns
-   * Uses domain and URL structure to create meaningful placeholders
-   */
   generateInitialPreview(url) {
     const domain = this.extractDomain(url)
     const normalizedUrl = url.toLowerCase()
 
-    // Base preview structure
-    const basePreview = {
+    // Default preview data
+    let preview = {
       title: this.generateTitleFromUrl(url, domain),
       domain: domain,
-      image: null, // No hardcoded images
-      imageAspectRatio: 16 / 9 // Default aspect ratio
+      image: null,
+      excerpt: null,
+      imageAspectRatio: 16 / 9,
+      type: 'website',
+      contentType: 'website',
+      favicon: null
     }
 
-    // YouTube video patterns
+    // Special handling for YouTube
     if (
       normalizedUrl.includes('youtube.com/watch') ||
       normalizedUrl.includes('youtu.be/')
     ) {
-      return {
-        ...basePreview,
+      const videoId = this.extractVideoIdFromUrl(url)
+      preview = {
+        ...preview,
+        image: videoId
+          ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+          : null,
         type: 'youtube',
-        imageAspectRatio: 16 / 9
+        contentType: 'video',
+        favicon:
+          'https://www.youtube.com/s/desktop/12d6b690/img/favicon_144x144.png'
       }
-    }
-
-    // YouTube Shorts
-    if (normalizedUrl.includes('youtube.com/shorts/')) {
-      return {
-        ...basePreview,
+    } else if (normalizedUrl.includes('youtube.com/shorts/')) {
+      const videoId = this.extractVideoIdFromUrl(url)
+      preview = {
+        ...preview,
+        image: videoId
+          ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+          : null,
+        imageAspectRatio: 9 / 16,
         type: 'youtube-short',
-        imageAspectRatio: 9 / 16
+        contentType: 'video',
+        favicon:
+          'https://www.youtube.com/s/desktop/12d6b690/img/favicon_144x144.png'
       }
+    } else {
+      // Try to guess favicon for common domains
+      const baseUrl = this.getBaseUrl(url)
+      preview.favicon = `${baseUrl}/favicon.ico`
     }
 
-    // GitHub repositories
-    if (normalizedUrl.includes('github.com/')) {
-      return {
-        ...basePreview,
-        type: 'github',
-        imageAspectRatio: 1 / 1
-      }
-    }
-
-    // Documentation sites
-    if (
-      normalizedUrl.includes('docs.') ||
-      normalizedUrl.includes('documentation')
-    ) {
-      return {
-        ...basePreview,
-        type: 'docs',
-        imageAspectRatio: 1 / 1
-      }
-    }
-
-    // Default website preview
-    return {
-      ...basePreview,
-      type: 'website',
-      imageAspectRatio: 1 / 1
-    }
+    console.log('🛠️ Generated initial preview:', preview)
+    return preview
   }
 
-  /**
-   * Generate a meaningful title from the URL
-   */
-  generateTitleFromUrl(url, domain) {
+  getBaseUrl(url) {
     try {
       const urlObj = new URL(url.match(/^https?:\/\//) ? url : `https://${url}`)
-      const pathname = urlObj.pathname
-
-      // For root pages, use domain
-      if (pathname === '/' || pathname === '') {
-        return this.formatDomainAsTitle(domain)
-      }
-
-      // Extract meaningful parts from path
-      const pathParts = pathname.split('/').filter((part) => part.length > 0)
-      const lastPart = pathParts[pathParts.length - 1]
-
-      // Remove file extensions and clean up
-      const cleanPart = lastPart
-        .replace(/\.[^.]+$/, '') // Remove file extension
-        .replace(/[-_]/g, ' ') // Replace hyphens and underscores with spaces
-        .replace(/\b\w/g, (l) => l.toUpperCase()) // Capitalize words
-
-      return cleanPart || this.formatDomainAsTitle(domain)
-    } catch {
-      return this.formatDomainAsTitle(domain)
+      return `${urlObj.protocol}//${urlObj.hostname}`
+    } catch (error) {
+      return url
     }
   }
 
-  /**
-   * Format domain name as a title
-   */
-  formatDomainAsTitle(domain) {
-    return domain
-      .replace(/^www\./, '')
-      .split('.')[0]
-      .replace(/[-_]/g, ' ')
-      .replace(/\b\w/g, (l) => l.toUpperCase())
+  extractVideoIdFromUrl(url) {
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([^&\n?#]+)/,
+      /youtube\.com\/embed\/([^&\n?#]+)/,
+      /youtube\.com\/v\/([^&\n?#]+)/
+    ]
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern)
+      if (match && match[1]) {
+        return match[1]
+      }
+    }
+    return null
   }
 
   extractDomain(url) {
     try {
-      // Handle URLs without protocol
       const urlWithProtocol = url.match(/^https?:\/\//) ? url : `https://${url}`
       const domain = new URL(urlWithProtocol).hostname
       return domain.replace(/^www\./, '')
@@ -348,112 +312,102 @@ export class LinkPreviewWidget extends WidgetType {
     }
   }
 
+  generateTitleFromUrl(url, domain) {
+    try {
+      const urlObj = new URL(url.match(/^https?:\/\//) ? url : `https://${url}`)
+      const pathname = urlObj.pathname
+
+      if (pathname === '/' || pathname === '') {
+        return this.formatDomainAsTitle(domain)
+      }
+
+      const pathParts = pathname.split('/').filter((part) => part.length > 0)
+      const lastPart = pathParts[pathParts.length - 1]
+
+      const cleanPart = lastPart
+        .replace(/\.[^.]+$/, '')
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, (l) => l.toUpperCase())
+
+      return cleanPart || this.formatDomainAsTitle(domain)
+    } catch {
+      return this.formatDomainAsTitle(domain)
+    }
+  }
+
+  formatDomainAsTitle(domain) {
+    return domain
+      .replace(/^www\./, '')
+      .split('.')[0]
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, (l) => l.toUpperCase())
+  }
+
   clampText(text, maxLength) {
     return text.length > maxLength
       ? text.substring(0, maxLength - 3) + '...'
       : text
   }
 
-  /**
-   * Create a simple text fallback
-   */
   createFallbackIcon() {
     return this.previewData.domain.charAt(0).toUpperCase()
   }
 
+  // Add the YouTube detection method here
+  isYouTubeUrl(url) {
+    const normalizedUrl = url.toLowerCase()
+    return (
+      normalizedUrl.includes('youtube.com/watch') ||
+      normalizedUrl.includes('youtu.be/') ||
+      normalizedUrl.includes('youtube.com/shorts/')
+    )
+  }
+
+  getCurrentDisplayedTitle() {
+    if (this.domElement) {
+      const titleElement = this.domElement.querySelector('.preview-title')
+      if (titleElement) {
+        return titleElement.textContent
+      }
+    }
+    return this.previewData.title
+  }
+
+  setCustomTitle(newTitle) {
+    this.hasCustomTitle = true
+    this.previewData.title = newTitle
+
+    if (this.domElement) {
+      const titleElement = this.domElement.querySelector('.preview-title')
+      if (titleElement) {
+        titleElement.textContent = newTitle
+      }
+    }
+  }
+
   toDOM() {
+    console.log('LinkPreview: Creating DOM for:', this.linkInfo.url)
+
     const container = document.createElement('span')
     container.className = 'cm-link-preview-card'
     container.style.cssText = `
       display: inline-block;
-      width: 300px;
+      width: 100%;
+      max-width: 310px;
       overflow: hidden;
-      cursor: pointer;
       transition: all 0.2s ease;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       vertical-align: bottom;
       line-height: 1.4;
-      padding-top: 8px;
-      padding-bottom: 8px;
-      margin: 0;
+      margin: 8px 0;
+      background-color: #ffffffff;
+      border: .5px solid #b5b9c1ff;
+      border-radius: 10px;
+      user-select: none; /* Prevent text selection on the entire card */
+      -webkit-user-select: none;
     `
 
-    // Store reference for later updates
-    this.domElement = container
-
-    // Add global keydown listener for delete functionality
-    const handleGlobalKeydown = (e) => {
-      if (!document.contains(container)) {
-        // Widget is no longer in DOM, remove listener
-        document.removeEventListener('keydown', handleGlobalKeydown, true)
-        return
-      }
-
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        // IMPORTANT: Only ignore delete/backspace when ACTIVELY typing in dialog inputs
-        const activeElement = document.activeElement
-        const isTypingInDialogInput =
-          activeElement &&
-          activeElement.closest('.edit-link-dialog-overlay') &&
-          (activeElement.tagName === 'INPUT' ||
-            activeElement.tagName === 'TEXTAREA')
-
-        if (isTypingInDialogInput) {
-          console.log(
-            'Preview widget ignoring delete/backspace - user is typing in dialog input field'
-          )
-          return // Let the dialog input handle the key event
-        }
-
-        // If we get here, it's a legitimate delete operation in the editor
-        const cursor = this.view.state.selection.main.head
-        const { start, end } = this.linkInfo.position
-
-        console.log('Global keydown in preview widget:', {
-          key: e.key,
-          cursor,
-          start,
-          end,
-          shouldDelete: cursor === start || cursor === end
-        })
-
-        // FIXED: Check if this is backspace at the beginning of a line with preview widget
-        if (e.key === 'Backspace' && cursor === start) {
-          const line = this.view.state.doc.lineAt(cursor)
-          const isLinkAtLineStart = start === line.from
-
-          if (isLinkAtLineStart) {
-            console.log(
-              'Preview widget at line start - allowing line joining behavior'
-            )
-            return // Don't intercept, let the custom keymap handle line joining
-          }
-        }
-
-        if (cursor === start || cursor === end) {
-          console.log(
-            'Preview widget intercepting delete, removing entire link'
-          )
-          e.preventDefault()
-          e.stopPropagation()
-          e.stopImmediatePropagation()
-
-          this.view.dispatch({
-            changes: {
-              from: start,
-              to: end,
-              insert: ''
-            },
-            selection: { anchor: start, head: start }
-          })
-        }
-      }
-    }
-
-    // Add the listener with capture=true to intercept before other handlers
-    document.addEventListener('keydown', handleGlobalKeydown, true)
-
-    // Create image container
+    // Image container (for videos and fallback icons) - now at the top
     const imageContainer = document.createElement('div')
     imageContainer.className = 'preview-image-container'
     imageContainer.style.cssText = `
@@ -463,29 +417,32 @@ export class LinkPreviewWidget extends WidgetType {
       align-items: center;
       justify-content: center;
       position: relative;
-      border-left: 1px solid #d1d5db;
-      border-right: 1px solid #d1d5db;
-      border-top: 1px solid #d1d5db;
-      border-top-left-radius: 8px;
-      border-top-right-radius: 8px;
-      min-height: 120px;
+      border-top-left-radius: 10px;
+      border-top-right-radius: 10px;
+      max-width: 330px;
+      width: 100%;
+      height: 157.5px;
+      cursor: default;
+      pointer-events: none;
     `
 
-    // Create image element (initially hidden if no image)
+    // Image element
     const img = document.createElement('img')
     img.alt = 'Preview'
     img.style.cssText = `
-      width: 50%;
-      height: 100%;
-      object-fit: cover;
+      width: 100%;
+      height: auto;
+      border-top-left-radius: 10px;
+      border-top-right-radius: 10px;
       display: ${this.previewData.image ? 'block' : 'none'};
+      pointer-events: none;
+      user-select: none;
     `
-
     if (this.previewData.image) {
       img.src = this.previewData.image
     }
 
-    // Create fallback element
+    // Fallback icon
     const fallback = document.createElement('div')
     fallback.className = 'preview-image-fallback'
     fallback.style.cssText = `
@@ -493,227 +450,405 @@ export class LinkPreviewWidget extends WidgetType {
       align-items: center;
       justify-content: center;
       width: 100%;
-      height: 100%;
+      height: 157.5px;
+      min-height: 157.5px;
       background: #f3f4f6;
       color: #9ca3af;
       font-size: 32px;
       font-weight: 600;
-      position: absolute;
-      top: 0;
-      left: 0;
+      border-top-left-radius: 10px;
+      border-top-right-radius: 10px;
+      pointer-events: none;
+      user-select: none;
     `
     fallback.textContent = this.createFallbackIcon()
 
-    // Handle image load error
+    imageContainer.appendChild(img)
+    imageContainer.appendChild(fallback)
+
+    // Article container (for article text) - alternative to image container
+    const articleContainer = document.createElement('div')
+    articleContainer.className = 'preview-article-container'
+    articleContainer.style.cssText = `
+      display: none;
+      overflow: hidden;
+      background-color: #F6F6F6;
+      border-top-left-radius: 10px;
+      border-top-right-radius: 10px;
+      max-width: 330px;
+      width: 100%;
+      height: 157.5px;
+      // padding: 30px 24.5px 0 24.5px;
+      padding: 25px 30.5px 0 30.5px;
+      cursor: default;
+      pointer-events: none;
+      position: relative;
+    `
+
+    // Inner text container with white background - grows to fit content
+    const articleTextContainer = document.createElement('div')
+    articleTextContainer.className = 'preview-article-text-container'
+    articleTextContainer.style.cssText = `
+      border-top-left-radius: 5px;
+      border-top-right-radius: 5px;
+      padding: 0px 16px 16px;
+      width: 100%;
+      height: 150px;
+      transform: rotate(-3.36deg);
+    `
+
+    // Article text
+    const articleText = document.createElement('div')
+    articleText.className = 'preview-article-text'
+    articleText.style.cssText = `
+      color: #455966;
+      font-size: 8px;
+      line-height: 1.3;
+      pointer-events: none;
+      user-select: none;
+      word-wrap: break-word;
+      hyphens: auto;
+      white-space: pre-line;
+    `
+    articleText.textContent =
+      this.previewData.excerpt || 'Loading article content...'
+
+    articleTextContainer.appendChild(articleText)
+
+    // Top gradient overlay for fade-in effect
+    const topGradient = document.createElement('div')
+    topGradient.className = 'preview-article-top-gradient'
+    topGradient.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100px;
+      background: linear-gradient(to bottom, rgba(246, 246, 246, 1), rgba(246, 246, 246, 0));
+      pointer-events: none;
+      border-top-left-radius: 10px;
+      border-top-right-radius: 10px;
+      z-index: 1;
+    `
+
+    // Bottom gradient overlay for fade-out effect
+    const bottomGradient = document.createElement('div')
+    bottomGradient.className = 'preview-article-bottom-gradient'
+    bottomGradient.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 100px;
+      background: linear-gradient(to top, rgba(246, 246, 246, 1), rgba(246, 246, 246, 0));
+      pointer-events: none;
+      z-index: 1;
+    `
+
+    articleContainer.appendChild(articleTextContainer)
+    // articleContainer.appendChild(topGradient)
+    // articleContainer.appendChild(bottomGradient)
+
+    // Content section with padding for title and bottom row
+    const contentSection = document.createElement('div')
+    contentSection.className = 'preview-content'
+    contentSection.style.cssText = `
+      padding: 12px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    `
+
+    // Title section - now single line with ellipsis
+    const title = document.createElement('div')
+    title.className = 'preview-title'
+    title.style.cssText = `
+      font-size: 16px;
+      font-weight: 600;
+      color: #455966;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: default;
+      user-select: text;
+    `
+    title.textContent = this.previewData.title
+    title.title = this.previewData.title // Show full title on hover
+
+    // Prevent click events on title
+    title.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
+
+    // Bottom row with favicon, author/domain, and buttons
+    const bottomRow = document.createElement('div')
+    bottomRow.className = 'preview-bottom-row'
+    bottomRow.style.cssText = `
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: #9ca3af;
+    `
+
+    // Left side container (favicon + author/domain)
+    const leftContainer = document.createElement('div')
+    leftContainer.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    `
+
+    // Favicon
+    const favicon = document.createElement('img')
+    favicon.className = 'preview-favicon'
+    favicon.alt = 'Favicon'
+    favicon.style.cssText = `
+      width: 16px;
+      height: 16px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      display: ${this.previewData.favicon ? 'inline-block' : 'none'};
+      cursor: pointer;
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: optimize-contrast;
+      image-rendering: crisp-edges;
+    `
+    if (this.previewData.favicon) {
+      favicon.src = this.previewData.favicon
+    }
+
+    // Link text (authors or domain - clickable)
+    const linkText = document.createElement('span')
+    linkText.className = 'preview-link-text'
+    linkText.style.cssText = `
+      cursor: pointer;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 11px;
+    `
+
+    // Determine what to display: authors or domain
+    if (
+      this.previewData.author &&
+      (Array.isArray(this.previewData.author)
+        ? this.previewData.author.length > 0
+        : this.previewData.author.trim())
+    ) {
+      // Display authors
+      const authorText = Array.isArray(this.previewData.author)
+        ? this.previewData.author.join(', ')
+        : this.previewData.author
+      linkText.textContent = this.clampText(authorText, 20)
+      linkText.title = `By ${authorText} • ${this.previewData.domain}`
+    } else {
+      // Fallback to domain
+      linkText.textContent = this.clampText(this.previewData.domain, 15)
+      linkText.title = this.previewData.domain
+    }
+
+    // Handle favicon and link text clicks
+    const handleUrlClick = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      console.log('URL clicked:', this.linkInfo.url)
+
+      if (window.ReactNativeWebView) {
+        let url = this.linkInfo.url
+        if (!url.match(/^https?:\/\//i)) {
+          url = url.match(/^www\./i) ? 'https://' + url : 'https://' + url
+        }
+        window.ReactNativeWebView.postMessage(
+          JSON.stringify({
+            type: 'OPEN_URL_EXTERNAL',
+            url: url
+          })
+        )
+      } else {
+        // Fallback for browser
+        import('./linkUtils.js').then(({ safeOpenUrl }) => {
+          safeOpenUrl(this.linkInfo.url)
+        })
+      }
+    }
+
+    favicon.addEventListener('click', handleUrlClick)
+    linkText.addEventListener('click', handleUrlClick)
+
+    // Handle favicon error
+    favicon.onerror = () => {
+      console.warn('Favicon failed to load:', favicon.src)
+      favicon.style.display = 'none'
+    }
+
+    favicon.onload = () => {
+      console.log('Favicon loaded successfully:', favicon.src)
+    }
+
+    leftContainer.appendChild(favicon)
+    leftContainer.appendChild(linkText)
+
+    // Button container
+    const buttonContainer = document.createElement('div')
+    buttonContainer.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 0px;
+      flex-shrink: 0;
+    `
+
+    // AI Magic button
+    const aiMagicButton = document.createElement('button')
+    aiMagicButton.className = 'preview-ai-magic-button'
+    aiMagicButton.style.cssText = `
+      font-size: 18px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.2s ease;
+      margin-right: 0px;
+      color: #9ca3af;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    `
+
+    // Also update the icon to prevent selection
+    const aiMagicIcon = createIcon(ICONS.AI_MAGIC)
+    aiMagicIcon.style.userSelect = 'none'
+    aiMagicIcon.style.webkitUserSelect = 'none'
+    aiMagicButton.appendChild(aiMagicIcon)
+
+    // Fixed AI Magic button event handler for linkPreview.js
+    aiMagicButton.addEventListener('click', async (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+
+      console.log('AI Magic button clicked for:', this.linkInfo.url)
+
+      // Blur the editor to dismiss keyboard
+      if (this.view && this.view.contentDOM) {
+        this.view.contentDOM.blur()
+      }
+
+      if (this.linkInfo.url && this.isYouTubeUrl(this.linkInfo.url)) {
+        // Show loading state on the button
+        aiMagicIcon.style.opacity = '0.5'
+        aiMagicButton.disabled = true
+
+        // Send message to React Native to handle the AI Magic request
+        // React Native will then handle the loading widget insertion and API call
+        window.ReactNativeWebView?.postMessage(
+          JSON.stringify({
+            type: 'AI_MAGIC_REQUEST',
+            url: this.linkInfo.url,
+            linkPosition: this.linkInfo.position
+          })
+        )
+      } else {
+        console.log('AI Magic: URL is not a YouTube video')
+      }
+    })
+
+    // Handle edit button
+    const editButton = document.createElement('button')
+    editButton.className = 'preview-edit-button'
+    editButton.style.cssText = `
+      font-size: 18px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: opacity 0.2s ease;
+    `
+    const editIcon = createIcon(ICONS.EDIT)
+    editButton.appendChild(editIcon)
+
+    // Handle edit button click
+    editButton.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      console.log('Edit button clicked')
+
+      const currentPreviewState = getLinkPreviewState(
+        this.linkInfo.text,
+        this.linkInfo.url
+      )
+      const currentDisplayedTitle = this.getCurrentDisplayedTitle()
+
+      const linkInfoWithPreview = {
+        ...this.linkInfo,
+        text: currentDisplayedTitle,
+        isPreview: currentPreviewState
+      }
+
+      try {
+        createEditLinkDialog(
+          linkInfoWithPreview,
+          this.view,
+          createLinkSaveHandler(this.linkInfo, this.view, editButton),
+          editButton
+        )
+      } catch (error) {
+        console.error('Failed to create edit dialog:', error)
+      }
+    })
+
+    buttonContainer.appendChild(aiMagicButton)
+    buttonContainer.appendChild(editButton)
+
+    bottomRow.appendChild(leftContainer)
+    bottomRow.appendChild(buttonContainer)
+
+    // Prevent clicks on containers
+    imageContainer.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
+
+    articleContainer.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
+
+    // Image error handling
     img.onerror = () => {
+      console.warn('Image failed to load, showing fallback')
       img.style.display = 'none'
       fallback.style.display = 'flex'
     }
 
-    // Handle successful image load
     img.onload = () => {
+      console.log('Image loaded successfully')
       if (this.previewData.image) {
         img.style.display = 'block'
         fallback.style.display = 'none'
       }
     }
 
-    imageContainer.appendChild(img)
-    imageContainer.appendChild(fallback)
-
-    // Create info section
-    const infoSection = document.createElement('div')
-    infoSection.className = 'preview-info'
-    infoSection.style.cssText = `
-      padding: 8px 10px 10px;
-      background: white;
-      border-left: 1px solid #d1d5db;
-      border-right: 1px solid #d1d5db;
-      border-bottom: 1px solid #d1d5db;
-      border-bottom-left-radius: 8px;
-      border-bottom-right-radius: 8px;
-    `
-
-    // Create title
-    const title = document.createElement('div')
-    title.className = 'preview-title'
-    title.style.cssText = `
-      font-size: 16px;
-      font-weight: 600;
-      color: #1f2937;
-      margin-bottom: 4px;
-      line-height: 1.4;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    `
-    title.textContent = this.previewData.title
-
-    // Create URL section
-    const urlSection = document.createElement('div')
-    urlSection.className = 'preview-url'
-    urlSection.style.cssText = `
-      font-size: 12px;
-      color: #9ca3af;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-    `
-
-    // Create domain text
-    const domainText = document.createElement('span')
-    domainText.textContent = this.clampText(this.previewData.domain, 25)
-
-    // Create edit button with pencil SVG
-    const editButton = document.createElement('button')
-    editButton.className = 'preview-edit-button'
-    editButton.style.cssText = `
-      background: none;
-      border: none;
-      cursor: pointer;
-      padding: 2px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0.6;
-      transition: opacity 0.2s ease;
-    `
-
-    editButton.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 29 29" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M27.7664 6.3033C28.1569 6.69383 28.1569 7.32699 27.7664 7.71751L9.18198 26.3019C8.05676 27.4271 6.53064 28.0593 4.93934 28.0593H1C0.447715 28.0593 0 27.6115 0 27.0593V23.1199C0 21.5286 0.632141 20.0025 1.75736 18.8773L20.3417 0.292893C20.7323 -0.0976311 21.3654 -0.097631 21.756 0.292893L27.7664 6.3033ZM3.0948 21.0754C2.71379 21.4564 2.49973 21.9732 2.49973 22.512C2.49973 24.1951 3.86416 25.5595 5.54727 25.5595C6.0861 25.5595 6.60287 25.3455 6.98389 24.9645L18.574 13.3744C18.9645 12.9838 18.9645 12.3507 18.574 11.9602L16.0991 9.48528C15.7086 9.09476 15.0754 9.09476 14.6849 9.48528L3.0948 21.0754ZM17.8669 6.3033C17.4764 6.69383 17.4764 7.32699 17.8669 7.71751L20.3417 10.1924C20.7323 10.5829 21.3654 10.5829 21.756 10.1924L24.2308 7.71751C24.6214 7.32699 24.6214 6.69383 24.2308 6.3033L21.756 3.82843C21.3654 3.4379 20.7323 3.4379 20.3417 3.82843L17.8669 6.3033Z" fill="#9ca3af"/>
-        <path d="M27 25.5C27.5523 25.5 28 25.9477 28 26.5V27C28 27.5523 27.5523 28 27 28H16C15.4477 28 15 27.5523 15 27V26.5C15 25.9477 15.4477 25.5 16 25.5H27Z" fill="#9ca3af" fill-opacity="0.29"/>
-      </svg>
-    `
-
-    // Add hover effect
-    editButton.addEventListener('mouseenter', () => {
-      editButton.style.opacity = '1'
-    })
-    editButton.addEventListener('mouseleave', () => {
-      editButton.style.opacity = '0.6'
-    })
-
-    // Add click handler to open edit dialog
-    editButton.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-
-      // Import and create edit link dialog
-      import('./linkDialog.js').then(({ createEditLinkDialog }) => {
-        import('./linkStyling.js').then(
-          ({ getLinkPreviewState, setLinkPreviewState }) => {
-            // Get current preview state
-            const currentPreviewState = getLinkPreviewState(
-              this.linkInfo.text,
-              this.linkInfo.url
-            )
-
-            // FIXED: Use current displayed title instead of original linkInfo.text
-            const currentDisplayedTitle = this.getCurrentDisplayedTitle()
-
-            const linkInfoWithPreview = {
-              ...this.linkInfo,
-              text: currentDisplayedTitle, // Use the current displayed title
-              isPreview: currentPreviewState
-            }
-
-            createEditLinkDialog(
-              linkInfoWithPreview,
-              this.view,
-              (editedData) => {
-                // Handle the edited link data
-                if (this.linkInfo.position) {
-                  const { start, end } = this.linkInfo.position
-                  let newLinkText = ''
-
-                  // Store the custom title globally if it's different from the address
-                  if (
-                    editedData.title &&
-                    editedData.title !== editedData.address
-                  ) {
-                    setCustomLinkTitle(
-                      editedData.address,
-                      this.linkInfo.text,
-                      editedData.title
-                    )
-                  }
-
-                  // Update preview state
-                  setLinkPreviewState(
-                    editedData.title,
-                    editedData.address,
-                    editedData.showPreview
-                  )
-
-                  // FIXED: Separate preview mode from title logic
-                  if (editedData.showPreview) {
-                    // Preview mode: always create markdown
-                    const linkTitle = editedData.title || editedData.address
-                    newLinkText = `[${linkTitle}](${editedData.address})`
-                  } else if (
-                    editedData.title &&
-                    editedData.title !== editedData.address
-                  ) {
-                    // Non-preview mode: only create markdown if title is different
-                    newLinkText = `[${editedData.title}](${editedData.address})`
-                  } else {
-                    // Non-preview mode: plain URL
-                    newLinkText = editedData.address
-                  }
-
-                  // Replace the text in the editor
-                  this.view.dispatch({
-                    changes: {
-                      from: start,
-                      to: end,
-                      insert: newLinkText
-                    }
-                  })
-                }
-              },
-              editButton
-            )
-          }
-        )
-      })
-    })
-
-    urlSection.appendChild(domainText)
-    urlSection.appendChild(editButton)
-
-    // Assemble the info section
-    infoSection.appendChild(title)
-    infoSection.appendChild(urlSection)
-
-    // Assemble the container
+    // Assemble the container in new order: image/article -> content section (title + bottom row)
     container.appendChild(imageContainer)
-    container.appendChild(infoSection)
+    container.appendChild(articleContainer)
 
-    // Add click handler to open the link
-    container.addEventListener('click', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
+    contentSection.appendChild(title)
+    contentSection.appendChild(bottomRow)
+    container.appendChild(contentSection)
 
-      // Import and use the safe URL opener
-      import('./linkUtils.js').then(({ safeOpenUrl }) => {
-        safeOpenUrl(this.linkInfo.url)
-      })
-    })
+    // Store reference to DOM element
+    this.domElement = container
 
-    // Add context menu support (right-click)
-    container.addEventListener('contextmenu', (e) => {
-      e.preventDefault()
-      e.stopPropagation()
-
-      // Import and create context menu
-      import('./linkHandlers.js').then(({ createLinkContextMenu }) => {
-        createLinkContextMenu(this.linkInfo, e, this.view, container)
-      })
-    })
-
+    console.log('LinkPreview: DOM created successfully')
     return container
   }
 
@@ -730,35 +865,21 @@ export class LinkPreviewWidget extends WidgetType {
   }
 }
 
-// Factory function to create preview widgets
 export const createLinkPreview = (linkInfo, view) => {
   return new LinkPreviewWidget(linkInfo, view)
 }
 
-// Add CSS styles for the preview card
 export const linkPreviewTheme = `
   .cm-link-preview-card {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   
-  .cm-link-preview-card .preview-image-container img {
-    transition: transform 0.2s ease;
-  }
-  
-  .cm-link-preview-card:hover .preview-image-container img {
-    transform: scale(1.02);
-  }
-  
-  .cm-link-preview-card .preview-title {
-    transition: color 0.2s ease;
-  }
-  
-  .cm-link-preview-card:hover .preview-title {
-    color: #dc2626;
+  .preview-favicon {
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: optimize-contrast;
   }
 `
 
-// Function to inject the preview styles into the document
 export const injectPreviewStyles = () => {
   if (!document.getElementById('link-preview-styles')) {
     const style = document.createElement('style')

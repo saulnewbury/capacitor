@@ -10,97 +10,122 @@
  * Redirects clicks in the marker area to the start
  * of the heading text area
  *
- * Prevents any cursor movement when clicking on the
- * heading indicator tags (h1, h2, etc.) to the left
+ * Redirects clicks on the heading indicator tags (h1, h2, etc.)
+ * to the start of the heading text
  *
  */
 
-import { EditorView, ViewPlugin } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
+import { EditorView, ViewPlugin } from '@codemirror/view'
 
 // ViewPlugin to handle heading indicator clicks
-const headingIndicatorClickBlocker = ViewPlugin.fromClass(
+const headingIndicatorClickHandler = ViewPlugin.fromClass(
   class {
     constructor(view) {
       this.view = view
-      this.handleClick = this.handleClick.bind(this)
-      // Use capture phase to intercept clicks before they bubble
-      view.dom.addEventListener('mousedown', this.handleClick, true)
+      this.handleMouseDown = this.handleMouseDown.bind(this)
+      // Only listen to mousedown to catch the event early
+      view.dom.addEventListener('mousedown', this.handleMouseDown, true)
     }
 
-    handleClick(event) {
+    handleMouseDown(event) {
+      // Check if this is a heading indicator element
       const target = event.target
 
-      // Check if we clicked on an element with contenteditable inside a heading
-      if (
-        target &&
-        target.hasAttribute &&
-        target.hasAttribute('contenteditable')
-      ) {
-        let parent = target.parentElement
-        while (parent) {
-          if (
-            parent.classList &&
-            (parent.classList.contains('cm-heading-1') ||
-              parent.classList.contains('cm-heading-2') ||
-              parent.classList.contains('cm-heading-3') ||
-              parent.classList.contains('cm-heading-4') ||
-              parent.classList.contains('cm-heading-5') ||
-              parent.classList.contains('cm-heading-6'))
-          ) {
-            // This is a heading indicator - block the click
-            event.preventDefault()
-            event.stopPropagation()
-            event.stopImmediatePropagation()
-            return
-          }
-          parent = parent.parentElement
+      if (!target || !target.hasAttribute) return
+
+      // Look for contenteditable="false" which marks heading indicators
+      if (target.getAttribute('contenteditable') === 'false') {
+        // Double-check this is actually within a heading line
+        const pos = this.view.posAtCoords({
+          x: event.clientX,
+          y: event.clientY
+        })
+        if (pos === null) return
+
+        const line = this.view.state.doc.lineAt(pos)
+        const text = line.text
+        const headingMatch = text.match(/^(#{1,6})\s/)
+
+        if (headingMatch) {
+          // Prevent all default behavior
+          event.preventDefault()
+          event.stopPropagation()
+          event.stopImmediatePropagation()
+
+          const prefixLen = headingMatch[1].length + 1
+          const headingTextStart = line.from + prefixLen
+
+          // Ensure we're focused and dispatch immediately
+          this.view.focus()
+
+          // Use requestAnimationFrame to ensure DOM has settled
+          requestAnimationFrame(() => {
+            this.view.dispatch({
+              selection: EditorSelection.cursor(headingTextStart),
+              scrollIntoView: true,
+              userEvent: 'select.pointer'
+            })
+          })
+
+          return false
         }
       }
     }
 
     destroy() {
-      this.view.dom.removeEventListener('mousedown', this.handleClick, true)
+      this.view.dom.removeEventListener('mousedown', this.handleMouseDown, true)
     }
   }
 )
 
-// Original heading click guard for heading text area
-export const headingClickGuard = [
-  headingIndicatorClickBlocker,
-  EditorView.domEventHandlers({
-    mousedown(event, view) {
-      // Get the position where the click occurred
-      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
-      if (pos === null) return false
+// Additional handler for edge cases in heading areas
+const headingAreaClickHandler = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    // Get click position
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+    if (pos === null) return false
 
-      const line = view.state.doc.lineAt(pos)
-      const text = line.text
+    const line = view.state.doc.lineAt(pos)
+    const text = line.text
 
-      // Check if this is a heading line
-      const headingMatch = text.match(/^(#{1,6})\s/)
-      if (!headingMatch) return false
+    // Check if this is a heading line
+    const headingMatch = text.match(/^(#{1,6})\s/)
+    if (!headingMatch) return false
 
-      const prefixLen = headingMatch[1].length + 1 // Length of heading markers + space
-      const headingTextStart = line.from + prefixLen
+    const prefixLen = headingMatch[1].length + 1
+    const headingTextStart = line.from + prefixLen
 
-      // If click occurred in the heading marker area, redirect to heading text start
-      if (pos < headingTextStart) {
-        // Prevent the default click behavior
+    // Check if we clicked before the actual heading content starts
+    if (pos < headingTextStart) {
+      // Check if we clicked on empty space (not on the indicator)
+      const target = event.target
+
+      // If target doesn't have contenteditable="false", it's empty space
+      if (
+        !target ||
+        !target.hasAttribute ||
+        target.getAttribute('contenteditable') !== 'false'
+      ) {
+        // For empty space clicks, ensure cursor doesn't jump to wrong position
+        // by explicitly setting it where clicked
         event.preventDefault()
 
-        // Position cursor at the start of the heading text
         view.dispatch({
-          selection: EditorSelection.cursor(headingTextStart),
+          selection: EditorSelection.cursor(pos),
           scrollIntoView: true,
           userEvent: 'select.pointer'
         })
 
-        return true // Event was handled
+        return true
       }
-
-      // Let default behavior happen for clicks in the heading text area
-      return false
     }
-  })
+
+    return false
+  }
+})
+
+export const headingClickGuard = [
+  headingIndicatorClickHandler,
+  headingAreaClickHandler
 ]

@@ -1,684 +1,523 @@
-// metadataFetcher.js - Real website metadata extraction with CORS fixes
+// metadataFetcher.js - Complete version for WebView integration with backend service
 
-/**
- * Fetches and parses website metadata for link previews
- */
 export class MetadataFetcher {
   constructor() {
-    // Cache to avoid repeated requests
     this.cache = new Map()
+    this.pendingRequests = new Map()
+    this.faviconCache = new Map()
 
-    // Known video providers for oEmbed/special handling
-    this.videoProviders = {
-      youtube: {
-        domains: ['youtube.com', 'youtu.be', 'm.youtube.com'],
-        oembedEndpoint: 'https://www.youtube.com/oembed'
-      },
-      vimeo: {
-        domains: ['vimeo.com'],
-        oembedEndpoint: 'https://vimeo.com/api/oembed.json'
-      },
-      tiktok: {
-        domains: ['tiktok.com'],
-        oembedEndpoint: 'https://www.tiktok.com/oembed'
-      }
-    }
+    // Get backend URL from window config (injected by htmlAndJsString.js)
+    this.backendUrl =
+      window.METADATA_SERVICE_CONFIG?.backendUrl || 'http://localhost:3001'
+    this.fallbackEnabled =
+      window.METADATA_SERVICE_CONFIG?.fallbackEnabled !== false
+
+    console.log('MetadataFetcher initialized with backend:', this.backendUrl)
   }
 
-  /**
-   * Main method to fetch metadata for a URL
-   */
   async fetchMetadata(url) {
-    // Normalize URL
-    const normalizedUrl = this.normalizeUrl(url)
+    console.log('fetchMetadata called for:', url)
+
+    const cacheKey = this._normalizeUrl(url)
 
     // Check cache first
-    if (this.cache.has(normalizedUrl)) {
-      console.log('Using cached metadata for:', normalizedUrl)
-      return this.cache.get(normalizedUrl)
+    if (this.cache.has(cacheKey)) {
+      console.log('Cache hit for:', url)
+      return this.cache.get(cacheKey)
     }
 
+    // Check if request is already pending
+    if (this.pendingRequests.has(cacheKey)) {
+      console.log('Request already pending for:', url)
+      return this.pendingRequests.get(cacheKey)
+    }
+
+    // Create new request
+    console.log('Creating new request for:', url)
+    const requestPromise = this._fetchMetadataWithBackend(url)
+    this.pendingRequests.set(cacheKey, requestPromise)
+
     try {
-      console.log('Fetching fresh metadata for:', normalizedUrl)
-
-      // Check if this is a known video provider
-      const videoProvider = this.detectVideoProvider(normalizedUrl)
-      if (videoProvider) {
-        const metadata = await this.fetchVideoMetadata(
-          normalizedUrl,
-          videoProvider
-        )
-        this.cache.set(normalizedUrl, metadata)
-        return metadata
-      }
-
-      // Fetch regular webpage
-      const metadata = await this.fetchWebpageMetadata(normalizedUrl)
-      this.cache.set(normalizedUrl, metadata)
-      return metadata
-    } catch (error) {
-      console.warn('Failed to fetch metadata for:', normalizedUrl, error)
-
-      // Return fallback metadata
-      const fallback = this.generateFallbackMetadata(normalizedUrl)
-      this.cache.set(normalizedUrl, fallback)
-      return fallback
+      const result = await requestPromise
+      console.log('Request completed for:', url, result)
+      this.cache.set(cacheKey, result)
+      return result
+    } finally {
+      this.pendingRequests.delete(cacheKey)
     }
   }
 
-  /**
-   * Normalize URL for consistency
-   */
-  normalizeUrl(url) {
-    try {
-      // Add protocol if missing
-      if (!url.match(/^https?:\/\//i)) {
-        url = url.startsWith('www.') ? `https://${url}` : `https://${url}`
-      }
-
-      const urlObj = new URL(url)
-      return urlObj.href
-    } catch {
-      return url
-    }
-  }
-
-  /**
-   * Detect if URL is from a known video provider
-   */
-  detectVideoProvider(url) {
-    try {
-      const urlObj = new URL(url)
-      const hostname = urlObj.hostname.toLowerCase()
-
-      for (const [provider, config] of Object.entries(this.videoProviders)) {
-        if (config.domains.some((domain) => hostname.includes(domain))) {
-          return { provider, config }
-        }
-      }
-    } catch {
-      return null
-    }
-
-    return null
-  }
-
-  /**
-   * Fetch metadata using oEmbed or provider-specific logic
-   */
-  async fetchVideoMetadata(url, { provider, config }) {
-    console.log(`Fetching ${provider} metadata for:`, url)
+  async _fetchMetadataWithBackend(url) {
+    console.log('_fetchMetadataWithBackend called for:', url)
 
     try {
-      // Try manual extraction first (works better with CORS)
-      const metadata = {
-        type: provider,
-        title: this.extractVideoTitle(url, provider),
-        description: this.getVideoDescription(provider),
-        image: this.getVideoThumbnail(url, provider),
-        imageAspectRatio: this.getDefaultVideoAspectRatio(url, provider),
-        domain: new URL(url).hostname.replace(/^www\./, ''),
-        url: url
-      }
+      // First, try the backend service
+      const response = await fetch(`${this.backendUrl}/api/metadata`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ url }),
+        signal: AbortSignal.timeout(15000) // 15 second timeout
+      })
 
-      // Try to enhance with oEmbed data if available (but don't fail if CORS blocks it)
-      try {
-        const oembedUrl = `${config.oembedEndpoint}?url=${encodeURIComponent(
-          url
-        )}&format=json`
-        const response = await this.fetchWithCors(oembedUrl)
+      console.log('Backend response status:', response.status)
+
+      if (response.ok) {
         const data = await response.json()
+        console.log('Backend metadata received:', data)
 
-        if (data.title) {
-          metadata.title = data.title
-        }
-        if (data.description) {
-          metadata.description = data.description
-        }
-        if (data.thumbnail_url) {
-          metadata.image = data.thumbnail_url
-        }
-        if (data.width && data.height) {
-          metadata.imageAspectRatio = data.width / data.height
-        }
-
-        console.log('Enhanced with oEmbed data:', metadata.title)
-      } catch (oembedError) {
-        console.warn(
-          'oEmbed fetch failed, using manual extraction:',
-          oembedError.message
-        )
-        // Continue with manual extraction
-      }
-
-      return metadata
-    } catch (error) {
-      console.warn('Video metadata extraction failed:', error)
-      // Return basic fallback
-      return {
-        type: provider,
-        title: this.extractVideoTitle(url, provider),
-        description: this.getVideoDescription(provider),
-        image: this.getVideoThumbnail(url, provider),
-        imageAspectRatio: this.getDefaultVideoAspectRatio(url, provider),
-        domain: new URL(url).hostname.replace(/^www\./, ''),
-        url: url
-      }
-    }
-  }
-
-  /**
-   * Get video description based on provider
-   */
-  getVideoDescription(provider) {
-    const descriptions = {
-      youtube: 'Video content from YouTube',
-      vimeo: 'Video content from Vimeo',
-      tiktok: 'Video content from TikTok'
-    }
-    return descriptions[provider] || 'Video content'
-  }
-
-  /**
-   * Get default aspect ratio based on URL and provider
-   */
-  getDefaultVideoAspectRatio(url, provider) {
-    if (provider === 'youtube' && url.includes('/shorts/')) {
-      return 9 / 16 // YouTube Shorts
-    }
-    return 16 / 9 // Standard video
-  }
-
-  /**
-   * Extract video thumbnail URL manually
-   */
-  getVideoThumbnail(url, provider) {
-    if (provider === 'youtube') {
-      // Extract video ID
-      const videoId = this.extractYouTubeVideoId(url)
-      if (videoId) {
-        return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`
-      }
-    }
-
-    // Return a default video icon
-    return this.createVideoIcon()
-  }
-
-  /**
-   * Extract YouTube video ID from various URL formats
-   */
-  extractYouTubeVideoId(url) {
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/
-    ]
-
-    for (const pattern of patterns) {
-      const match = url.match(pattern)
-      if (match) return match[1]
-    }
-
-    return null
-  }
-
-  /**
-   * Extract video title from URL (fallback)
-   */
-  extractVideoTitle(url, provider) {
-    // Try to extract a better title from the URL
-    if (provider === 'youtube') {
-      // For YouTube, try to get a more descriptive title
-      if (url.includes('/shorts/')) {
-        return 'YouTube Short'
+        // Validate and enhance the backend response
+        return this._validateAndEnhanceMetadata(data, url)
       } else {
-        return 'YouTube Video'
+        console.warn(
+          'Backend returned error:',
+          response.status,
+          response.statusText
+        )
+
+        // Check if backend provided fallback data
+        const errorData = await response.json().catch(() => ({}))
+        if (errorData.fallback) {
+          console.log('Using backend fallback data')
+          return this._validateAndEnhanceMetadata(errorData.fallback, url)
+        }
+
+        throw new Error(`Backend error: ${response.status}`)
       }
-    }
+    } catch (error) {
+      console.warn('Backend metadata fetch failed:', error)
 
-    const titles = {
-      vimeo: 'Vimeo Video',
-      tiktok: 'TikTok Video'
-    }
+      // Fallback to client-side scraping if enabled
+      if (this.fallbackEnabled) {
+        console.log('Attempting client-side fallback for:', url)
+        return await this._fetchMetadataClientSide(url)
+      }
 
-    return titles[provider] || 'Video'
+      // Final fallback to generated metadata
+      console.log('Using generated fallback metadata')
+      return this._generateFallbackMetadata(url)
+    }
   }
 
-  /**
-   * Fetch regular webpage metadata
-   */
-  async fetchWebpageMetadata(url) {
-    console.log('Fetching webpage metadata for:', url)
+  async _fetchMetadataClientSide(url) {
+    console.log('_fetchMetadataClientSide called for:', url)
 
-    const response = await this.fetchWithCors(url)
-    const html = await response.text()
-
-    // Parse HTML
-    const doc = new DOMParser().parseFromString(html, 'text/html')
-
-    // Extract metadata in priority order
-    const metadata = {
-      type: 'website',
-      title: this.extractTitle(doc),
-      description: this.extractDescription(doc),
-      image: await this.extractImage(doc, url),
-      imageAspectRatio: 1.91, // Common OG image ratio (1200x630)
-      domain: new URL(url).hostname.replace(/^www\./, ''),
-      url: url
-    }
-
-    console.log('Extracted metadata:', metadata)
-    return metadata
-  }
-
-  /**
-   * Extract title from various sources
-   */
-  extractTitle(doc) {
-    // Priority order: OG title, Twitter title, title tag, h1
-    const selectors = [
-      'meta[property="og:title"]',
-      'meta[name="twitter:title"]',
-      'title',
-      'h1'
-    ]
-
-    for (const selector of selectors) {
-      const element = doc.querySelector(selector)
-      if (element) {
-        const title = element.content || element.textContent
-        if (title && title.trim()) {
-          return title.trim()
+    try {
+      // Try YouTube-specific fetching first (this still works client-side)
+      if (this._isYouTubeUrl(url)) {
+        console.log('Detected YouTube URL, using YouTube fetcher')
+        const youtubeData = await this._fetchYouTubeMetadata(url)
+        if (youtubeData) {
+          console.log('YouTube metadata fetched successfully:', youtubeData)
+          return youtubeData
         }
       }
-    }
 
-    return 'Untitled'
-  }
+      // For non-YouTube URLs, we can't reliably scrape due to CORS
+      // So we generate smart fallback metadata and try to get favicon
+      console.log('Generating enhanced fallback metadata for:', url)
+      const fallbackData = this._generateFallbackMetadata(url)
 
-  /**
-   * Extract description from various sources
-   */
-  extractDescription(doc) {
-    // Priority order: OG description, Twitter description, meta description
-    const selectors = [
-      'meta[property="og:description"]',
-      'meta[name="twitter:description"]',
-      'meta[name="description"]'
-    ]
-
-    for (const selector of selectors) {
-      const element = doc.querySelector(selector)
-      if (element && element.content && element.content.trim()) {
-        return element.content.trim()
+      // Try to enhance with favicon if possible
+      const favicon = await this._tryFetchFavicon(url)
+      if (favicon) {
+        fallbackData.favicon = favicon
       }
-    }
 
-    // Fallback: extract from first paragraph
-    const firstParagraph = doc.querySelector('p')
-    if (firstParagraph && firstParagraph.textContent) {
-      const text = firstParagraph.textContent.trim()
-      return text.length > 160 ? text.substring(0, 157) + '...' : text
+      return fallbackData
+    } catch (error) {
+      console.warn('Client-side metadata fetch failed:', error)
+      return this._generateFallbackMetadata(url)
     }
-
-    return 'No description available'
   }
 
-  /**
-   * Extract image from various sources with validation
-   */
-  async extractImage(doc, baseUrl) {
-    console.log('Extracting image for:', baseUrl)
+  async _tryFetchFavicon(url) {
+    console.log('Trying to fetch favicon for:', url)
 
-    // Priority order for image sources
-    const imageSources = [
-      // Open Graph images (highest priority)
-      { selector: 'meta[property="og:image"]', attr: 'content' },
-      { selector: 'meta[property="og:image:url"]', attr: 'content' },
+    const cacheKey = `favicon_${this._normalizeUrl(url)}`
+    if (this.faviconCache.has(cacheKey)) {
+      return this.faviconCache.get(cacheKey)
+    }
 
-      // Twitter Card images
-      { selector: 'meta[name="twitter:image"]', attr: 'content' },
-      { selector: 'meta[name="twitter:image:src"]', attr: 'content' },
-
-      // Favicons (try multiple selectors)
-      { selector: 'link[rel="apple-touch-icon"]', attr: 'href' },
-      { selector: 'link[rel="apple-touch-icon-precomposed"]', attr: 'href' },
-      { selector: 'link[rel="icon"][type="image/png"]', attr: 'href' },
-      { selector: 'link[rel="icon"][type="image/svg+xml"]', attr: 'href' },
-      { selector: 'link[rel="icon"][sizes]', attr: 'href' },
-      { selector: 'link[rel="shortcut icon"]', attr: 'href' },
-      { selector: 'link[rel="icon"]', attr: 'href' }
-    ]
-
-    // Check standard meta tags and favicons
-    for (const source of imageSources) {
-      const elements = doc.querySelectorAll(source.selector)
-      for (const element of elements) {
-        const imageUrl = element.getAttribute(source.attr)
-        if (imageUrl) {
-          const fullUrl = this.resolveUrl(imageUrl, baseUrl)
-          console.log('Found potential image:', fullUrl)
-
-          if (await this.isValidImage(fullUrl)) {
-            console.log('Using image:', fullUrl)
-            return fullUrl
-          }
+    try {
+      // Try backend favicon endpoint first
+      const encodedUrl = encodeURIComponent(url)
+      const response = await fetch(
+        `${this.backendUrl}/api/favicon/${encodedUrl}`,
+        {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000)
         }
-      }
-    }
+      )
 
-    // Try common favicon paths if nothing found
-    const commonFaviconPaths = [
-      '/favicon.ico',
-      '/favicon.png',
-      '/favicon.svg',
-      '/apple-touch-icon.png',
-      '/apple-touch-icon-180x180.png',
-      '/icon-192x192.png',
-      '/icon-512x512.png'
-    ]
-
-    for (const path of commonFaviconPaths) {
-      const faviconUrl = this.resolveUrl(path, baseUrl)
-      console.log('Trying common favicon path:', faviconUrl)
-
-      if (await this.isValidImage(faviconUrl)) {
-        console.log('Using common favicon:', faviconUrl)
+      if (response.ok) {
+        const data = await response.json()
+        const faviconUrl = data.faviconUrl
+        console.log('Backend favicon found:', faviconUrl)
+        this.faviconCache.set(cacheKey, faviconUrl)
         return faviconUrl
       }
+    } catch (error) {
+      console.warn('Backend favicon fetch failed:', error)
     }
 
-    // Check JSON-LD structured data
-    const jsonLdImage = this.extractJsonLdImage(doc, baseUrl)
-    if (jsonLdImage && (await this.isValidImage(jsonLdImage))) {
-      console.log('Using JSON-LD image:', jsonLdImage)
-      return jsonLdImage
-    }
-
-    // Fallback: look for the largest image in content
-    const contentImage = await this.findLargestContentImage(doc, baseUrl)
-    if (contentImage) {
-      console.log('Using content image:', contentImage)
-      return contentImage
-    }
-
-    // Final fallback: generate a default icon
-    console.log('Using default icon')
-    return this.createDefaultIcon()
+    // Fallback to basic favicon guess
+    const baseUrl = this._getBaseUrl(url)
+    const fallbackFavicon = `${baseUrl}/favicon.ico`
+    this.faviconCache.set(cacheKey, fallbackFavicon)
+    return fallbackFavicon
   }
 
-  /**
-   * Extract image from JSON-LD structured data
-   */
-  extractJsonLdImage(doc, baseUrl) {
-    const scripts = doc.querySelectorAll('script[type="application/ld+json"]')
+  _validateAndEnhanceMetadata(data, originalUrl) {
+    console.log('Validating and enhancing metadata:', data)
 
-    for (const script of scripts) {
-      try {
-        const data = JSON.parse(script.textContent)
-        const image = this.findImageInJsonLd(data)
-        if (image) {
-          return this.resolveUrl(image, baseUrl)
-        }
-      } catch {
-        // Skip invalid JSON
-      }
+    // Ensure all required fields are present with fallbacks
+    const validated = {
+      title: data.title || this._generateTitleFromUrl(originalUrl),
+      domain: data.domain || this._extractDomain(originalUrl),
+      image: data.image || null,
+      imageAspectRatio:
+        data.imageAspectRatio || (data.contentType === 'video' ? 16 / 9 : 1),
+      type: data.type || 'website',
+      contentType: data.contentType || 'website',
+      favicon: data.favicon || `${this._getBaseUrl(originalUrl)}/favicon.ico`,
+      excerpt: data.excerpt || data.description || null,
+      author: data.author || null,
+      cached: data.cached || false
     }
 
-    return null
+    // Enhance contentType detection
+    if (validated.excerpt && validated.excerpt.length > 200) {
+      validated.contentType = 'article'
+    } else if (
+      validated.type?.includes('youtube') ||
+      validated.image?.includes('youtube')
+    ) {
+      validated.contentType = 'video'
+    }
+
+    console.log('Validated metadata:', validated)
+    return validated
   }
 
-  /**
-   * Recursively find image in JSON-LD data
-   */
-  findImageInJsonLd(data) {
-    if (typeof data === 'string' && this.looksLikeImageUrl(data)) {
-      return data
-    }
+  // YouTube-specific methods (kept for client-side fallback)
+  async _fetchYouTubeMetadata(url) {
+    console.log('_fetchYouTubeMetadata called for:', url)
 
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        const image = this.findImageInJsonLd(item)
-        if (image) return image
-      }
-    }
-
-    if (typeof data === 'object' && data !== null) {
-      // Check common image properties
-      const imageProps = ['image', 'logo', 'photo', 'thumbnail']
-      for (const prop of imageProps) {
-        if (data[prop]) {
-          const image = this.findImageInJsonLd(data[prop])
-          if (image) return image
-        }
-      }
-
-      // Recursively check other properties
-      for (const value of Object.values(data)) {
-        const image = this.findImageInJsonLd(value)
-        if (image) return image
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * Find the largest image in page content
-   */
-  async findLargestContentImage(doc, baseUrl) {
-    const images = doc.querySelectorAll('img[src]')
-    const candidates = []
-
-    for (const img of images) {
-      const src = img.getAttribute('src')
-      if (src && !this.isIgnorableImage(src)) {
-        const fullUrl = this.resolveUrl(src, baseUrl)
-
-        // Try to get dimensions from attributes
-        const width = parseInt(img.getAttribute('width') || '0')
-        const height = parseInt(img.getAttribute('height') || '0')
-        const area = width * height
-
-        candidates.push({ url: fullUrl, area, element: img })
-      }
-    }
-
-    // Sort by area (largest first)
-    candidates.sort((a, b) => b.area - a.area)
-
-    // Validate candidates
-    for (const candidate of candidates) {
-      if (await this.isValidImage(candidate.url)) {
-        return candidate.url
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * Check if image URL should be ignored
-   */
-  isIgnorableImage(src) {
-    const ignorePatterns = [
-      /\.svg$/i,
-      /\/(pixel|spacer|blank|1x1|tracking)/i,
-      /\b\d+x\d+\b/i, // Skip very small images by filename
-      /ad[sv]?\.|\bad[\d_]|\bads\b/i // Skip ad-related images
-    ]
-
-    return ignorePatterns.some((pattern) => pattern.test(src))
-  }
-
-  /**
-   * Check if string looks like an image URL
-   */
-  looksLikeImageUrl(str) {
-    // More permissive image URL detection
-    return (
-      /\.(jpg|jpeg|png|gif|webp|bmp|tiff|svg)(\?|#|$)/i.test(str) ||
-      str.includes('image') ||
-      str.includes('photo') ||
-      str.includes('picture') ||
-      str.includes('img') ||
-      str.includes('avatar') ||
-      str.includes('logo') ||
-      str.includes('icon')
-    )
-  }
-
-  /**
-   * Resolve relative URLs to absolute
-   */
-  resolveUrl(url, baseUrl) {
     try {
-      return new URL(url, baseUrl).href
-    } catch {
-      return url
+      // Try YouTube oEmbed API (works client-side)
+      const oembedData = await this._tryYouTubeOEmbed(url)
+      if (oembedData) {
+        console.log('YouTube oEmbed successful:', oembedData)
+        return oembedData
+      }
+
+      // Fallback to direct YouTube method
+      console.log('oEmbed failed, trying direct YouTube method...')
+      return await this._tryYouTubeDirect(url)
+    } catch (error) {
+      console.warn('YouTube metadata fetch failed:', error)
+      return null
     }
   }
 
-  /**
-   * Validate that image URL returns a valid image
-   */
-  async isValidImage(url, minWidth = 100, minHeight = 100) {
+  async _tryYouTubeOEmbed(url) {
     try {
-      // Quick size check for very small images by URL
-      if (url.match(/(\d+)x(\d+)/)) {
-        const [, width, height] = url.match(/(\d+)x(\d+)/)
-        if (parseInt(width) < minWidth || parseInt(height) < minHeight) {
-          return false
-        }
-      }
-
-      // For CORS-protected images, we can't easily validate them
-      // Instead, we'll do basic URL validation and assume they're valid
-      // In a production app, you'd validate this server-side
-
-      // Check if URL looks like an image
-      if (this.looksLikeImageUrl(url)) {
-        return true
-      }
-
-      // For other URLs, try basic validation but don't fail if it doesn't work
-      try {
-        // Don't use proxy for image validation to avoid rate limits
-        // Just assume images are valid if they pass basic checks
-        return true
-      } catch {
-        // If validation fails, assume it's valid if it looks like an image URL
-        return this.looksLikeImageUrl(url)
-      }
-    } catch {
-      return false
-    }
-  }
-
-  /**
-   * Handle CORS issues using proxy
-   */
-  async fetchWithCors(url) {
-    // Skip direct fetch attempt and go straight to proxy to avoid CORS errors
-    try {
-      console.log('Fetching via proxy:', url)
-
-      // Use AllOrigins proxy
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(
+      const oembedUrl = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(
         url
       )}`
-      const response = await fetch(proxyUrl)
+      console.log('Fetching oEmbed from:', oembedUrl)
+
+      const response = await fetch(oembedUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      })
 
       if (!response.ok) {
-        throw new Error(`Proxy response not ok: ${response.status}`)
+        throw new Error(
+          `oEmbed response ${response.status}: ${response.statusText}`
+        )
       }
 
       const data = await response.json()
 
-      // Check if the proxied request was successful
-      if (!data.status || data.status.http_code >= 400) {
-        throw new Error(
-          `Target site returned ${data.status?.http_code || 'unknown error'}`
-        )
-      }
-
-      console.log('Proxy fetch successful for:', url)
-
-      // Return a Response-like object
       return {
-        ok: true,
-        status: data.status?.http_code || 200,
-        text: () => Promise.resolve(data.contents || ''),
-        json: () => Promise.resolve(JSON.parse(data.contents || '{}')),
-        headers: new Map([
-          ['content-type', data.status?.content_type || 'text/html']
-        ])
+        title: data.title || this._extractVideoIdFromUrl(url),
+        domain: 'youtube.com',
+        image: data.thumbnail_url || this._getYouTubeThumbnailUrl(url),
+        imageAspectRatio: this._getYouTubeAspectRatio(url),
+        type: this._getYouTubeType(url),
+        author: data.author_name || 'YouTube',
+        contentType: 'video',
+        favicon:
+          'https://www.youtube.com/s/desktop/12d6b690/img/favicon_144x144.png'
       }
     } catch (error) {
-      console.warn('Proxy fetch failed:', error)
-      throw new Error(`Failed to fetch via proxy: ${error.message}`)
+      console.warn('YouTube oEmbed failed:', error)
+      return null
     }
   }
 
-  /**
-   * Generate fallback metadata when fetching fails
-   */
-  generateFallbackMetadata(url) {
+  async _tryYouTubeDirect(url) {
+    const videoId = this._extractVideoIdFromUrl(url)
+
+    if (!videoId) {
+      return null
+    }
+
+    return {
+      title: this._generateYouTubeTitle(videoId, url),
+      domain: 'youtube.com',
+      image: this._getYouTubeThumbnailUrl(url, videoId),
+      imageAspectRatio: this._getYouTubeAspectRatio(url),
+      type: this._getYouTubeType(url),
+      contentType: 'video',
+      favicon:
+        'https://www.youtube.com/s/desktop/12d6b690/img/favicon_144x144.png'
+    }
+  }
+
+  // Utility methods
+  _isYouTubeUrl(url) {
+    const normalizedUrl = url.toLowerCase()
+    return (
+      normalizedUrl.includes('youtube.com/watch') ||
+      normalizedUrl.includes('youtu.be/') ||
+      normalizedUrl.includes('youtube.com/shorts/')
+    )
+  }
+
+  _extractVideoIdFromUrl(url) {
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([^&\n?#]+)/,
+      /youtube\.com\/embed\/([^&\n?#]+)/,
+      /youtube\.com\/v\/([^&\n?#]+)/
+    ]
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern)
+      if (match && match[1]) {
+        return match[1]
+      }
+    }
+    return null
+  }
+
+  _getYouTubeThumbnailUrl(url, videoId = null) {
+    const id = videoId || this._extractVideoIdFromUrl(url)
+    if (!id) return null
+
+    return `https://img.youtube.com/vi/${id}/maxresdefault.jpg`
+  }
+
+  _getYouTubeAspectRatio(url) {
+    return url.includes('/shorts/') ? 9 / 16 : 16 / 9
+  }
+
+  _getYouTubeType(url) {
+    return url.includes('/shorts/') ? 'youtube-short' : 'youtube'
+  }
+
+  _generateYouTubeTitle(videoId, url) {
+    if (url.includes('/shorts/')) {
+      return `YouTube Short: ${videoId}`
+    }
+    return `YouTube Video: ${videoId}`
+  }
+
+  _extractDomain(url) {
     try {
-      const urlObj = new URL(url)
-      const domain = urlObj.hostname.replace(/^www\./, '')
-
-      return {
-        type: 'website',
-        title: this.titleCase(domain.split('.')[0]),
-        description: `Visit ${domain} for more information`,
-        image: this.createDefaultIcon(),
-        imageAspectRatio: 1,
-        domain: domain,
-        url: url
-      }
+      const urlWithProtocol = url.match(/^https?:\/\//) ? url : `https://${url}`
+      const domain = new URL(urlWithProtocol).hostname
+      return domain.replace(/^www\./, '')
     } catch {
-      return {
-        type: 'website',
-        title: 'Link',
-        description: 'External link',
-        image: this.createDefaultIcon(),
-        imageAspectRatio: 1,
-        domain: url,
-        url: url
-      }
+      return url.length > 25 ? url.substring(0, 22) + '...' : url
     }
   }
 
-  /**
-   * Create default icon as data URL
-   */
-  createDefaultIcon() {
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-      </svg>
-    `
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  _getBaseUrl(url) {
+    try {
+      const urlObj = new URL(url.match(/^https?:\/\//) ? url : `https://${url}`)
+      return `${urlObj.protocol}//${urlObj.hostname}`
+    } catch (error) {
+      return url
+    }
   }
 
-  /**
-   * Create video icon as data URL
-   */
-  createVideoIcon() {
-    const svg = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="5,3 19,12 5,21"/>
-      </svg>
-    `
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  _normalizeUrl(url) {
+    try {
+      const urlObj = new URL(url.match(/^https?:\/\//) ? url : `https://${url}`)
+      return urlObj.href.toLowerCase()
+    } catch {
+      return url.toLowerCase()
+    }
   }
 
-  /**
-   * Convert string to title case
-   */
-  titleCase(str) {
-    return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase()
+  _generateTitleFromUrl(url) {
+    try {
+      const urlObj = new URL(url.match(/^https?:\/\//) ? url : `https://${url}`)
+      const domain = urlObj.hostname.replace(/^www\./, '')
+      const pathname = urlObj.pathname
+
+      if (pathname === '/' || pathname === '') {
+        return this._formatDomainAsTitle(domain)
+      }
+
+      const pathParts = pathname.split('/').filter((part) => part.length > 0)
+      const lastPart = pathParts[pathParts.length - 1]
+
+      const cleanPart = lastPart
+        .replace(/\.[^.]+$/, '')
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, (l) => l.toUpperCase())
+
+      return cleanPart || this._formatDomainAsTitle(domain)
+    } catch {
+      return this._extractDomain(url)
+    }
+  }
+
+  _formatDomainAsTitle(domain) {
+    return domain
+      .replace(/^www\./, '')
+      .split('.')[0]
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, (l) => l.toUpperCase())
+  }
+
+  _generateFallbackMetadata(url) {
+    const domain = this._extractDomain(url)
+    const normalizedUrl = url.toLowerCase()
+
+    let type = 'website'
+    let aspectRatio = 1
+    let favicon = null
+
+    // Enhanced fallback detection
+    if (normalizedUrl.includes('github.com')) {
+      type = 'github'
+      favicon = 'https://github.com/favicon.ico'
+    } else if (
+      normalizedUrl.includes('docs.') ||
+      normalizedUrl.includes('documentation')
+    ) {
+      type = 'docs'
+    } else if (this._isYouTubeUrl(url)) {
+      type = this._getYouTubeType(url)
+      aspectRatio = this._getYouTubeAspectRatio(url)
+      favicon =
+        'https://www.youtube.com/s/desktop/12d6b690/img/favicon_144x144.png'
+    } else if (
+      normalizedUrl.includes('twitter.com') ||
+      normalizedUrl.includes('x.com')
+    ) {
+      type = 'twitter'
+      favicon = 'https://abs.twimg.com/favicons/twitter.3.ico'
+    } else if (normalizedUrl.includes('linkedin.com')) {
+      type = 'linkedin'
+      favicon =
+        'https://static.licdn.com/scds/common/u/images/logos/favicons/v1/favicon.ico'
+    } else {
+      favicon = `${this._getBaseUrl(url)}/favicon.ico`
+    }
+
+    return {
+      title: this._generateTitleFromUrl(url),
+      domain: domain,
+      image: this._isYouTubeUrl(url) ? this._getYouTubeThumbnailUrl(url) : null,
+      imageAspectRatio: aspectRatio,
+      type: type,
+      contentType: this._isYouTubeUrl(url) ? 'video' : 'website',
+      favicon: favicon,
+      excerpt: null,
+      author: null
+    }
+  }
+
+  // Configuration methods
+  setBackendUrl(url) {
+    this.backendUrl = url
+    console.log('Backend URL updated to:', url)
+  }
+
+  enableFallback(enabled = true) {
+    this.fallbackEnabled = enabled
+    console.log('Client-side fallback', enabled ? 'enabled' : 'disabled')
+  }
+
+  // Enhanced cache management
+  clearCache() {
+    console.log('Clearing all metadata cache')
+    this.cache.clear()
+    this.faviconCache.clear()
+    console.log('Cache cleared - all future requests will fetch fresh data')
+  }
+
+  clearUrlCache(url) {
+    const cacheKey = this._normalizeUrl(url)
+    const faviconKey = `favicon_${cacheKey}`
+
+    const metadataDeleted = this.cache.delete(cacheKey)
+    const faviconDeleted = this.faviconCache.delete(faviconKey)
+
+    console.log(`Cache cleared for ${url}:`, {
+      metadata: metadataDeleted ? 'cleared' : 'not found',
+      favicon: faviconDeleted ? 'cleared' : 'not found'
+    })
+
+    return metadataDeleted || faviconDeleted
+  }
+
+  async forceRefresh(url) {
+    console.log('Force refreshing metadata for:', url)
+    this.clearUrlCache(url)
+    return this.fetchMetadata(url)
+  }
+
+  getCacheStats() {
+    return {
+      metadataCache: this.cache.size,
+      faviconCache: this.faviconCache.size,
+      pendingRequests: this.pendingRequests.size
+    }
+  }
+
+  // Health check for backend service
+  async checkBackendHealth() {
+    try {
+      const response = await fetch(`${this.backendUrl}/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000)
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        console.log('Backend health check successful:', data)
+        return { healthy: true, data }
+      } else {
+        console.warn('Backend health check failed:', response.status)
+        return { healthy: false, status: response.status }
+      }
+    } catch (error) {
+      console.warn('Backend health check error:', error)
+      return { healthy: false, error: error.message }
+    }
+  }
+
+  // Method to preload critical images for faster display
+  preloadImage(imageUrl) {
+    if (!imageUrl) return Promise.resolve(false)
+
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve(true)
+      img.onerror = () => resolve(false)
+      img.src = imageUrl
+    })
   }
 }
+
+// Export a singleton instance
+export const metadataFetcher = new MetadataFetcher()

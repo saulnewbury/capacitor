@@ -16,7 +16,6 @@ import { LanguageDescription } from '@codemirror/language' // Add this line
 
 // Custom code block extensions
 import { codeBlockExtensions } from '@/plugins/codeBlockExtension'
-import { promptExtensions } from '@/plugins/promptExtension'
 
 // Other plugins
 import { gistLight } from '@/themes/gistLight'
@@ -60,9 +59,34 @@ import { tabEnterHandler } from '@/plugins/tabEnterHandler'
 
 import { linkExtensions } from '@/plugins/linkStyling'
 
+import { promptFieldExtensions } from '@/plugins/promptFieldExtension'
+import { textBubbleExtensions } from '@/plugins/textBubbleStyling'
+
 export default function CodeMirror(): JSX.Element {
   const editorRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
+
+  const iOSKeyboardExtension = EditorView.contentAttributes.of({
+    autocorrect: 'on',
+    autocapitalize: 'sentences',
+    spellcheck: 'true',
+    'data-gramm': 'false', // Disable Grammarly if present
+    inputmode: 'text'
+  })
+
+  const iOSAttributeHandler = EditorView.domEventHandlers({
+    focus: (event, view) => {
+      // Ensure the contenteditable element has the right attributes
+      const contentDOM = view.contentDOM
+      if (contentDOM) {
+        contentDOM.setAttribute('autocorrect', 'on')
+        contentDOM.setAttribute('autocapitalize', 'sentences')
+        contentDOM.setAttribute('spellcheck', 'true')
+        contentDOM.setAttribute('inputmode', 'text')
+      }
+      return false
+    }
+  })
 
   useEffect(() => {
     if (!editorRef.current || viewRef.current) return
@@ -90,68 +114,86 @@ export default function CodeMirror(): JSX.Element {
           defaultCodeLanguage: javascript()
         }),
 
-        // 2. Code block extensions
+        iOSKeyboardExtension,
+        iOSAttributeHandler,
+
+        // 2. Context menu extension
+        // contextMenuExtension,
+
+        // 3. Loading widget field (add early in extensions)
+        // loadingWidgetField,
+
+        // 4. Code block extensions
         codeBlockExtensions,
 
-        // 3. Prompt extensions
-        promptExtensions,
+        // 5. Prompt extensions
+        ...promptFieldExtensions,
+        ...textBubbleExtensions,
+        // ...iconExtensions,
 
-        // 4. Conceal and rich-text styling
+        // 6. Conceal and rich-text styling
         syntaxConceal,
         richTextStyling,
 
-        // 5. Tag styling
+        // 7. Tag styling
         tagExtensions,
 
-        linkExtensions,
+        // linkExtensions,
 
-        // 6. Heading-related extensions
+        // 8. Heading-related extensions
         headingStyling,
         ...headingClickGuard,
+        Prec.high(headingSelectionDelete),
         Prec.high(tabEnterHandler),
+        Prec.high(headingBackspace),
         Prec.high(headingOnEnter),
         Prec.high(headingShortcuts),
         Prec.high(headingContentBackspace),
         Prec.high(headingCmdLeft),
 
-        // 7. List-handling extensions
+        // 9. List-handling extensions
         Prec.high(listItemBackspace),
         Prec.high(lineStartNavigation),
         Prec.high(tabNavigation),
         Prec.high(smartTabHandler),
         Prec.high(listVerticalNavigation),
 
-        // 8. Line wrapping
+        // 10. Line wrapping
         EditorView.lineWrapping,
 
-        // 9. Keymaps
+        // 11. Keymaps
         Prec.high(smartListKeymap),
         Prec.high(skipWidgetBufferKeymap),
         keymap.of([...defaultKeymap, ...historyKeymap]),
 
-        // 10. List transforms and persistence
+        // 12. List transforms and persistence
         listIndentState,
         listStructureDecoration,
+        // listWrappingStyles,
+        // listTextWrappingDecoration,
         listPasteTransform(),
         listCopyTransform(),
         createListIndentPersistence(listIndentState),
         renumberOrderedLists(),
 
-        // 11. History, theme UI, and selection styling
+        // drawSelection({ cursorBlinkRate: 800, drawRangeCursor: true }),
+
+        // 13. History, theme UI, and selection styling
         history(),
         commonStyles,
-        gistLight,
         createCodeFont('monospace'),
         createTextFont('Nunito Sans'),
-        drawSelection({ cursorBlinkRate: 800, drawRangeCursor: true }),
+        gistLight
 
-        // 12. Update listener
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            const content = update.state.doc.toString()
-            // console.log('Content:', content)
-          }
-        })
+        // 14. Update listener
+        // EditorView.updateListener.of((update) => {
+        //   if (update.docChanged) {
+        //     const content = update.state.doc.toString()
+        //     window.ReactNativeWebView?.postMessage(
+        //       JSON.stringify({ type: 'content', content })
+        //     )
+        //   }
+        // })
       ]
 
       // Initial document content
@@ -183,11 +225,10 @@ export default function CodeMirror(): JSX.Element {
   }, [])
 
   return (
-    <div className='w-full'>
-      <div
-        ref={editorRef}
-        className='h-full w-[100%] overflow-visible markdown-editor outline-none'
-      />
+    <div className='w-full h-full relative overflow-hidden'>
+      <div className='absolute inset-0 overflow-y-scroll overflow-x-hidden'>
+        <div ref={editorRef} className='min-h-full w-full markdown-editor' />
+      </div>
     </div>
   )
 }
