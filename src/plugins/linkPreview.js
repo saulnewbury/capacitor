@@ -715,7 +715,7 @@ export class LinkPreviewWidget extends WidgetType {
       align-items: center;
       justify-content: center;
       transition: opacity 0.2s ease;
-      margin-right: 0px;
+      margin-right: 10px;
       color: #9ca3af;
       user-select: none;
       -webkit-user-select: none;
