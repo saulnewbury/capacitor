@@ -1,4 +1,4 @@
-// linkPreview.js - Updated with typical link preview layout
+// linkPreview.js - Fixed version with working edit button and URL clicks
 
 import { WidgetType } from '@codemirror/view'
 import { ICONS, createIcon } from './iconHelpers.js'
@@ -10,6 +10,7 @@ import {
 import { createEditLinkDialog } from './linkDialog.js'
 import { getLinkPreviewState } from './linkPreviewState.js'
 import { metadataFetcher } from './metadataFetcher.js'
+import { safeOpenUrl } from './linkUtils.js' // Import this at the top
 
 export class LinkPreviewWidget extends WidgetType {
   constructor(linkInfo, view) {
@@ -19,7 +20,7 @@ export class LinkPreviewWidget extends WidgetType {
     this.previewData = this.generateInitialPreview(linkInfo.url)
     this.domElement = null
 
-    console.log('ðŸ”— LinkPreviewWidget created for:', linkInfo.url)
+    console.log('🔗 LinkPreviewWidget created for:', linkInfo.url)
 
     // Check if this link has a custom title
     const customTitle = getCustomLinkTitle(linkInfo.url, linkInfo.text)
@@ -41,14 +42,13 @@ export class LinkPreviewWidget extends WidgetType {
   async fetchRealMetadata() {
     try {
       console.log(
-        'ðŸ” LinkPreview: Starting metadata fetch for:',
+        '🔍 LinkPreview: Starting metadata fetch for:',
         this.linkInfo.url
       )
 
       const realMetadata = await metadataFetcher.fetchMetadata(
         this.linkInfo.url
       )
-      // console.log('âœ… LinkPreview: Received metadata:', realMetadata)
 
       // Update our preview data
       this.previewData = {
@@ -56,14 +56,12 @@ export class LinkPreviewWidget extends WidgetType {
         title: this.hasCustomTitle ? this.previewData.title : realMetadata.title
       }
 
-      // console.log('ðŸ”„ LinkPreview: Updated preview data:', this.previewData)
-
       // Update the DOM if it exists
       if (this.domElement) {
         this.updateDOMContent(this.previewData)
       }
     } catch (error) {
-      console.warn('âš ï¸ LinkPreview: Failed to fetch metadata:', error)
+      console.warn('⚠️ LinkPreview: Failed to fetch metadata:', error)
     }
   }
 
@@ -97,7 +95,7 @@ export class LinkPreviewWidget extends WidgetType {
           : data.author
         const clampedAuthorText = this.clampText(authorText, 20)
         linkTextElement.textContent = clampedAuthorText
-        linkTextElement.title = `By ${authorText} â€¢ ${data.domain}`
+        linkTextElement.title = `By ${authorText} • ${data.domain}`
         console.log('Updated authors to:', clampedAuthorText)
       } else if (data.domain) {
         // Fallback to domain
@@ -122,7 +120,7 @@ export class LinkPreviewWidget extends WidgetType {
 
   updateContentDisplay(data) {
     console.log(
-      'ðŸ–¼ï¸ LinkPreview: Updating content display for type:',
+      '🖼️ LinkPreview: Updating content display for type:',
       data.contentType
     )
 
@@ -162,7 +160,7 @@ export class LinkPreviewWidget extends WidgetType {
       imageContainer.style.display = 'flex'
       articleContainer.style.display = 'none'
     } else if (data.contentType === 'channel' && data.image) {
-      // Show channel avatar (same as video but square aspect ratio)
+      // Show channel avatar
       const img = imageContainer.querySelector('img')
       const fallback = imageContainer.querySelector('.preview-image-fallback')
 
@@ -211,14 +209,13 @@ export class LinkPreviewWidget extends WidgetType {
       imgElement.style.width = '100%'
       imgElement.style.height = 'auto'
       imgElement.style.aspectRatio = '16 / 9'
-      imgElement.style.objectFit = 'cover' // This clips the image
+      imgElement.style.objectFit = 'cover'
     } else {
-      // All other images (including YouTube channel avatars, favicons, etc.)
-      // should display at full width and show the complete image
+      // All other images should display at full width and show the complete image
       imgElement.style.width = '100%'
       imgElement.style.height = 'auto'
-      imgElement.style.aspectRatio = 'auto' // Let the natural aspect ratio determine height
-      imgElement.style.objectFit = 'contain' // Show the full image without clipping
+      imgElement.style.aspectRatio = 'auto'
+      imgElement.style.objectFit = 'contain'
     }
   }
 
@@ -273,7 +270,7 @@ export class LinkPreviewWidget extends WidgetType {
       preview.favicon = `${baseUrl}/favicon.ico`
     }
 
-    console.log('ðŸ› ï¸ Generated initial preview:', preview)
+    console.log('🛠️ Generated initial preview:', preview)
     return preview
   }
 
@@ -353,7 +350,6 @@ export class LinkPreviewWidget extends WidgetType {
     return this.previewData.domain.charAt(0).toUpperCase()
   }
 
-  // Add the YouTube detection method here
   isYouTubeUrl(url) {
     const normalizedUrl = url.toLowerCase()
     return (
@@ -403,7 +399,7 @@ export class LinkPreviewWidget extends WidgetType {
       background-color: #ffffffff;
       border: .5px solid #b5b9c1ff;
       border-radius: 10px;
-      user-select: none; /* Prevent text selection on the entire card */
+      user-select: none;
       -webkit-user-select: none;
     `
 
@@ -478,14 +474,13 @@ export class LinkPreviewWidget extends WidgetType {
       max-width: 330px;
       width: 100%;
       height: 157.5px;
-      // padding: 30px 24.5px 0 24.5px;
       padding: 25px 30.5px 0 30.5px;
       cursor: default;
       pointer-events: none;
       position: relative;
     `
 
-    // Inner text container with white background - grows to fit content
+    // Inner text container with white background
     const articleTextContainer = document.createElement('div')
     articleTextContainer.className = 'preview-article-text-container'
     articleTextContainer.style.cssText = `
@@ -514,40 +509,7 @@ export class LinkPreviewWidget extends WidgetType {
       this.previewData.excerpt || 'Loading article content...'
 
     articleTextContainer.appendChild(articleText)
-
-    // Top gradient overlay for fade-in effect
-    const topGradient = document.createElement('div')
-    topGradient.className = 'preview-article-top-gradient'
-    topGradient.style.cssText = `
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100px;
-      background: linear-gradient(to bottom, rgba(246, 246, 246, 1), rgba(246, 246, 246, 0));
-      pointer-events: none;
-      border-top-left-radius: 10px;
-      border-top-right-radius: 10px;
-      z-index: 1;
-    `
-
-    // Bottom gradient overlay for fade-out effect
-    const bottomGradient = document.createElement('div')
-    bottomGradient.className = 'preview-article-bottom-gradient'
-    bottomGradient.style.cssText = `
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      width: 100%;
-      height: 100px;
-      background: linear-gradient(to top, rgba(246, 246, 246, 1), rgba(246, 246, 246, 0));
-      pointer-events: none;
-      z-index: 1;
-    `
-
     articleContainer.appendChild(articleTextContainer)
-    // articleContainer.appendChild(topGradient)
-    // articleContainer.appendChild(bottomGradient)
 
     // Content section with padding for title and bottom row
     const contentSection = document.createElement('div')
@@ -646,17 +608,18 @@ export class LinkPreviewWidget extends WidgetType {
         ? this.previewData.author.join(', ')
         : this.previewData.author
       linkText.textContent = this.clampText(authorText, 20)
-      linkText.title = `By ${authorText} â€¢ ${this.previewData.domain}`
+      linkText.title = `By ${authorText} • ${this.previewData.domain}`
     } else {
       // Fallback to domain
       linkText.textContent = this.clampText(this.previewData.domain, 15)
       linkText.title = this.previewData.domain
     }
 
-    // Handle favicon and link text clicks
+    // FIXED: Handle favicon and link text clicks
     const handleUrlClick = (e) => {
       e.preventDefault()
       e.stopPropagation()
+      e.stopImmediatePropagation()
       console.log('URL clicked:', this.linkInfo.url)
 
       if (window.ReactNativeWebView) {
@@ -671,15 +634,27 @@ export class LinkPreviewWidget extends WidgetType {
           })
         )
       } else {
-        // Fallback for browser
-        import('./linkUtils.js').then(({ safeOpenUrl }) => {
-          safeOpenUrl(this.linkInfo.url)
-        })
+        // Use the imported safeOpenUrl function
+        safeOpenUrl(this.linkInfo.url)
       }
     }
 
+    // Add both click and touch handlers
     favicon.addEventListener('click', handleUrlClick)
     linkText.addEventListener('click', handleUrlClick)
+
+    // Add touch handlers for mobile
+    favicon.addEventListener('touchstart', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      handleUrlClick(e)
+    })
+
+    linkText.addEventListener('touchstart', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      handleUrlClick(e)
+    })
 
     // Handle favicon error
     favicon.onerror = () => {
@@ -722,16 +697,16 @@ export class LinkPreviewWidget extends WidgetType {
       -webkit-touch-callout: none;
     `
 
-    // Also update the icon to prevent selection
     const aiMagicIcon = createIcon(ICONS.AI_MAGIC)
     aiMagicIcon.style.userSelect = 'none'
     aiMagicIcon.style.webkitUserSelect = 'none'
     aiMagicButton.appendChild(aiMagicIcon)
 
-    // Fixed AI Magic button event handler for linkPreview.js
+    // AI Magic button event handler
     aiMagicButton.addEventListener('click', async (e) => {
       e.preventDefault()
       e.stopPropagation()
+      e.stopImmediatePropagation()
 
       console.log('AI Magic button clicked for:', this.linkInfo.url)
 
@@ -745,8 +720,7 @@ export class LinkPreviewWidget extends WidgetType {
         aiMagicIcon.style.opacity = '0.5'
         aiMagicButton.disabled = true
 
-        // Send message to React Native to handle the AI Magic request
-        // React Native will then handle the loading widget insertion and API call
+        // Send message to React Native
         window.ReactNativeWebView?.postMessage(
           JSON.stringify({
             type: 'AI_MAGIC_REQUEST',
@@ -759,7 +733,7 @@ export class LinkPreviewWidget extends WidgetType {
       }
     })
 
-    // Handle edit button
+    // FIXED: Handle edit button
     const editButton = document.createElement('button')
     editButton.className = 'preview-edit-button'
     editButton.style.cssText = `
@@ -771,15 +745,23 @@ export class LinkPreviewWidget extends WidgetType {
       align-items: center;
       justify-content: center;
       transition: opacity 0.2s ease;
+      color: #9ca3af;
+      padding: 4px;
     `
     const editIcon = createIcon(ICONS.EDIT)
     editButton.appendChild(editIcon)
 
-    // Handle edit button click
-    editButton.addEventListener('click', (e) => {
+    // FIXED: Handle edit button click with proper event handling
+    const handleEditClick = (e) => {
       e.preventDefault()
       e.stopPropagation()
-      console.log('Edit button clicked')
+      e.stopImmediatePropagation()
+      console.log('Edit button clicked for preview widget')
+
+      // Blur the editor to dismiss keyboard
+      if (this.view && this.view.contentDOM) {
+        this.view.contentDOM.blur()
+      }
 
       const currentPreviewState = getLinkPreviewState(
         this.linkInfo.text,
@@ -794,15 +776,24 @@ export class LinkPreviewWidget extends WidgetType {
       }
 
       try {
+        console.log('Creating edit dialog with linkInfo:', linkInfoWithPreview)
         createEditLinkDialog(
           linkInfoWithPreview,
           this.view,
-          createLinkSaveHandler(this.linkInfo, this.view, editButton),
-          editButton
+          createLinkSaveHandler(this.linkInfo, this.view, null),
+          null // Pass null to avoid positioning issues
         )
       } catch (error) {
         console.error('Failed to create edit dialog:', error)
       }
+    }
+
+    // Add both click and touch handlers for edit button
+    editButton.addEventListener('click', handleEditClick)
+    editButton.addEventListener('touchstart', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      handleEditClick(e)
     })
 
     buttonContainer.appendChild(aiMagicButton)
@@ -837,7 +828,7 @@ export class LinkPreviewWidget extends WidgetType {
       }
     }
 
-    // Assemble the container in new order: image/article -> content section (title + bottom row)
+    // Assemble the container
     container.appendChild(imageContainer)
     container.appendChild(articleContainer)
 
