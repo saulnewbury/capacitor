@@ -702,8 +702,8 @@ export class LinkPreviewWidget extends WidgetType {
     aiMagicIcon.style.webkitUserSelect = 'none'
     aiMagicButton.appendChild(aiMagicIcon)
 
-    // AI Magic button event handler
-    aiMagicButton.addEventListener('click', async (e) => {
+    // AI Magic button event handler - using Capacitor
+    const handleAIMagic = async (e) => {
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
@@ -720,17 +720,31 @@ export class LinkPreviewWidget extends WidgetType {
         aiMagicIcon.style.opacity = '0.5'
         aiMagicButton.disabled = true
 
-        // Send message to React Native
-        window.ReactNativeWebView?.postMessage(
-          JSON.stringify({
-            type: 'AI_MAGIC_REQUEST',
-            url: this.linkInfo.url,
-            linkPosition: this.linkInfo.position
-          })
-        )
+        // For Capacitor, you'll need to implement a custom plugin or use a different approach
+        // This is a placeholder - replace with your actual AI Magic implementation
+        console.log('AI Magic request for YouTube URL:', this.linkInfo.url)
+
+        // If you have a custom Capacitor plugin for AI Magic:
+        // await YourCustomPlugin.requestAIMagic({ url: this.linkInfo.url })
+
+        // Or if using a web API:
+        // await callAIMagicAPI(this.linkInfo.url)
+
+        // Reset button state after processing
+        setTimeout(() => {
+          aiMagicIcon.style.opacity = '1'
+          aiMagicButton.disabled = false
+        }, 2000)
       } else {
         console.log('AI Magic: URL is not a YouTube video')
       }
+    }
+
+    aiMagicButton.addEventListener('click', handleAIMagic)
+    aiMagicButton.addEventListener('touchstart', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      handleAIMagic(e)
     })
 
     // FIXED: Handle edit button

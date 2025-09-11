@@ -1,5 +1,5 @@
 'use client'
-// linkHandlers.js - Updated for Capacitor
+// linkHandlers.js - Fully updated for Capacitor
 
 import { Prec } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
@@ -20,7 +20,6 @@ import { Capacitor } from '@capacitor/core'
 import { Haptics, ImpactStyle } from '@capacitor/haptics'
 import { ActionSheet, ActionSheetButtonStyle } from '@capacitor/action-sheet'
 import { Clipboard } from '@capacitor/clipboard'
-import { Browser } from '@capacitor/browser'
 
 // Global editor view storage
 let currentEditorView = null
@@ -112,13 +111,17 @@ const handleCursorNearPreview = (view, pos, event) => {
   return false
 }
 
-// Show context menu - fallback to custom menu if ActionSheet not available
+// Show context menu using Capacitor ActionSheet
 const showLinkContextMenu = async (linkInfo, event, view) => {
   console.log('📱 Showing context menu for link', linkInfo)
 
   try {
     // Try using ActionSheet if available
-    if (typeof ActionSheet !== 'undefined' && ActionSheet.showActions) {
+    if (
+      Capacitor.isNativePlatform() &&
+      typeof ActionSheet !== 'undefined' &&
+      ActionSheet.showActions
+    ) {
       const buttons = []
 
       if (linkInfo.type === 'email') {
@@ -148,16 +151,17 @@ const showLinkContextMenu = async (linkInfo, event, view) => {
 
       switch (selectedTitle) {
         case 'Open Link':
-          await Browser.open({ url: linkInfo.url })
+          await safeOpenUrl(linkInfo.url)
           break
 
         case 'Open Email':
-          safeOpenEmail(linkInfo.url)
+          await safeOpenEmail(linkInfo.url)
           break
 
         case 'Copy Link':
         case 'Copy Email Address':
           await Clipboard.write({ string: linkInfo.url })
+          console.log('Copied to clipboard:', linkInfo.url)
           break
 
         case 'Edit Link':
@@ -222,13 +226,7 @@ const showCustomContextMenu = (linkInfo, event, view) => {
     items.push(
       {
         label: 'Open Link',
-        action: async () => {
-          if (Capacitor.isNativePlatform()) {
-            await Browser.open({ url: linkInfo.url })
-          } else {
-            window.open(linkInfo.url, '_blank')
-          }
-        }
+        action: () => safeOpenUrl(linkInfo.url)
       },
       {
         label: 'Copy Link',
@@ -332,7 +330,7 @@ const handleEditLink = (linkInfo, view) => {
 
 // Main click handler
 export const linkClickHandler = EditorView.domEventHandlers({
-  click: (event, view) => {
+  click: async (event, view) => {
     setCurrentEditorView(view)
 
     if (event.button !== 0) return false
@@ -400,9 +398,9 @@ export const linkClickHandler = EditorView.domEventHandlers({
                 ) ||
                 linkUrl.startsWith('mailto:')
               ) {
-                safeOpenEmail(linkUrl.replace('mailto:', ''))
+                await safeOpenEmail(linkUrl.replace('mailto:', ''))
               } else {
-                safeOpenUrl(linkUrl)
+                await safeOpenUrl(linkUrl)
               }
               return true
             }
@@ -433,7 +431,7 @@ export const linkClickHandler = EditorView.domEventHandlers({
     const lineText = line.text
     const posInLine = pos - line.from
 
-    // Check for markdown links (for clicks on brackets or other syntax parts)
+    // Check for markdown links
     const markdownMatches = [...lineText.matchAll(MARKDOWN_LINK_REGEX)]
     for (const mdMatch of markdownMatches) {
       if (
@@ -448,9 +446,9 @@ export const linkClickHandler = EditorView.domEventHandlers({
           linkUrl.match(/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$/) ||
           linkUrl.startsWith('mailto:')
         ) {
-          safeOpenEmail(linkUrl.replace('mailto:', ''))
+          await safeOpenEmail(linkUrl.replace('mailto:', ''))
         } else {
-          safeOpenUrl(linkUrl)
+          await safeOpenUrl(linkUrl)
         }
         return true
       }
@@ -473,7 +471,7 @@ export const linkClickHandler = EditorView.domEventHandlers({
         if (!isInMarkdownLink) {
           event.preventDefault()
           event.stopPropagation()
-          safeOpenUrl(match[0])
+          await safeOpenUrl(match[0])
           return true
         }
       }
@@ -495,7 +493,7 @@ export const linkClickHandler = EditorView.domEventHandlers({
         if (!isInMarkdownLink) {
           event.preventDefault()
           event.stopPropagation()
-          safeOpenEmail(match[0])
+          await safeOpenEmail(match[0])
           return true
         }
       }
@@ -604,7 +602,7 @@ export const touchHandler = EditorView.domEventHandlers({
 
         view._hapticTimer = setTimeout(async () => {
           if (!view._hasMoved && view._potentialLinkTouch) {
-            // Add Capacitor haptic feedback here
+            // Add Capacitor haptic feedback
             if (Capacitor.isNativePlatform()) {
               try {
                 await Haptics.impact({ style: ImpactStyle.Medium })
@@ -687,9 +685,9 @@ export const touchHandler = EditorView.domEventHandlers({
           ) ||
           linkInfo.url.startsWith('mailto:')
         ) {
-          safeOpenEmail(linkInfo.url.replace('mailto:', ''))
+          await safeOpenEmail(linkInfo.url.replace('mailto:', ''))
         } else {
-          safeOpenUrl(linkInfo.url)
+          await safeOpenUrl(linkInfo.url)
         }
 
         view._touchStartTime = null
@@ -719,7 +717,7 @@ export const highPriorityHandler = Prec.highest([
   touchHandler
 ])
 
-console.log('highPriorityHandler includes:', highPriorityHandler) // Debug log
+console.log('highPriorityHandler includes:', highPriorityHandler)
 
 // Initialize module
 if (typeof window !== 'undefined') {
